@@ -15,7 +15,7 @@ if not CRYPTOBOT_TOKEN:
 CRYPTO_CURRENCY = os.getenv("CRYPTO_CURRENCY", "USDT")
 ADMIN_LOG_CHAT_IDS = [int(x.strip()) for x in os.getenv("ADMIN_LOG_CHAT_IDS", "").split(",") if x.strip()]
 
-# Кастомные эмодзи для кнопок (если есть ID, иначе None)
+# Кастомные эмодзи (просто ID, можно заполнить из переменных окружения)
 CUSTOM_EMOJI = {
 "catalog": "6019248093835302806",
     "my_purchases": "6021650913289050282",
@@ -26,6 +26,5 @@ CUSTOM_EMOJI = {
     "check_payment": "5197653448912293869"
 }
 
-CUSTOM_EMOJIS = {key: f'<tg-emoji emoji-id="{CUSTOM_EMOJIS_IDS[key]}">😎</tg-emoji>' for key in CUSTOM_EMOJI_IDS}
 # ID канала для проверки подписки
 CHANNEL_ID = os.getenv("CHANNEL_ID", "")
