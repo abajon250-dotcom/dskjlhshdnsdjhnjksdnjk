@@ -15,6 +15,7 @@ class User(Base):
     username = Column(String, nullable=True)
     full_name = Column(String, nullable=True)
     is_admin = Column(Boolean, default=False)
+    is_banned = Column(Boolean, default=False)
 
     referred_by = Column(Integer, ForeignKey('users.tg_id'), nullable=True)
     referral_count = Column(Integer, default=0)

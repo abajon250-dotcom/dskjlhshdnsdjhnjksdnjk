@@ -12,14 +12,13 @@ CRYPTOBOT_TOKEN = os.getenv("CRYPTOBOT_TOKEN")
 if not CRYPTOBOT_TOKEN:
     raise ValueError("CRYPTOBOT_TOKEN не задан")
 
-CHANNEL_ID = os.getenv("CHANNEL_ID")
-if not CHANNEL_ID:
-    raise ValueError("CHANNEL_ID не задан")
-
 CRYPTO_CURRENCY = os.getenv("CRYPTO_CURRENCY", "USDT")
 ADMIN_LOG_CHAT_IDS = [int(x.strip()) for x in os.getenv("ADMIN_LOG_CHAT_IDS", "").split(",") if x.strip()]
 
-# Кастомные эмодзи
+# CHANNEL_ID используется только если вы включите проверку подписки (по умолчанию отключено)
+CHANNEL_ID = os.getenv("CHANNEL_ID", "")
+
+# Кастомные эмодзи для кнопок (если есть)
 CUSTOM_EMOJI_IDS = {
     "catalog": "6019248093835302806",
     "my_purchases": "6021650913289050282",
