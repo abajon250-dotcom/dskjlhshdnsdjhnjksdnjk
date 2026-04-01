@@ -14,6 +14,14 @@ from log_utils import log_action
 
 dp = Dispatcher()
 
+async def is_subscribed(user_id: int, bot: Bot) -> bool:
+    try:
+        member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
+        return member.status in ["member", "administrator", "creator"]
+    except Exception as e:
+        print(f"Ошибка проверки подписки: {e}")
+        return False
+
 # ------------------ FSM ------------------
 class AddProduct(StatesGroup):
     name = State()
@@ -49,6 +57,13 @@ def emoji_tag(emoji_id: str) -> str:
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message, bot: Bot):
     user_id = message.from_user.id
+    if not await is_subscribed(user_id, bot):
+        await message.answer(
+            "❌ Для использования бота необходимо подписаться на наш канал.\n\n"
+            "После подписки нажмите «Проверить подписку».",
+            reply_markup=kb.subscription_keyboard()
+        )
+        return
 
     # Обработка реферальной ссылки
     ref_param = None
@@ -670,3 +685,25 @@ async def admin_broadcast_send(message: types.Message, state: FSMContext, bot: B
     await message.answer(f"Рассылка завершена.\n✅ Отправлено: {sent}\n❌ Ошибок: {failed}")
     await log_action(bot, message.from_user.id, "admin_broadcast", f"Рассылка: {sent} успешно, {failed} ошибок")
     await state.clear()
+
+    @dp.callback_query(lambda c: c.data == "verify_sub")
+    async def verify_subscription(callback: types.CallbackQuery, bot: Bot):
+        user_id = callback.from_user.id
+        if await is_subscribed(user_id, bot):
+            await callback.message.delete()
+            # регистрируем пользователя (повторяем логику старта)
+            with models.SessionLocal() as db:
+                user = db.query(models.User).filter_by(tg_id=user_id).first()
+                if not user:
+                    user = models.User(
+                        tg_id=user_id,
+                        username=callback.from_user.username,
+                        full_name=callback.from_user.full_name
+                    )
+                    db.add(user)
+                    db.commit()
+            await callback.message.answer("Спасибо за подписку! Теперь вы можете пользоваться ботом.",
+                                          reply_markup=kb.main_menu_keyboard())
+        else:
+            await callback.answer("Вы ещё не подписались. Пожалуйста, подпишитесь и нажмите снова.", show_alert=True)
+        await callback.answer()

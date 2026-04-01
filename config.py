@@ -12,6 +12,10 @@ CRYPTOBOT_TOKEN = os.getenv("CRYPTOBOT_TOKEN")
 if not CRYPTOBOT_TOKEN:
     raise ValueError("CRYPTOBOT_TOKEN не задан")
 
+CHANNEL_ID = os.getenv("CHANNEL_ID")
+if not CHANNEL_ID:
+    raise ValueError("CHANNEL_ID не задан")
+
 CRYPTO_CURRENCY = os.getenv("CRYPTO_CURRENCY", "USDT")
 ADMIN_LOG_CHAT_IDS = [int(x.strip()) for x in os.getenv("ADMIN_LOG_CHAT_IDS", "").split(",") if x.strip()]
 

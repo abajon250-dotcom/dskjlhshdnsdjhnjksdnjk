@@ -86,3 +86,14 @@ def admin_menu_keyboard():
         [InlineKeyboardButton(text="🔙 В главное меню", callback_data="main_menu")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons, row_width=2)
+
+def subscription_keyboard():
+    if CHANNEL_ID.startswith('@'):
+        url = f"https://t.me/{CHANNEL_ID[1:]}"
+    else:
+        url = f"https://t.me/c/{str(CHANNEL_ID)[4:]}"
+    buttons = [
+        [InlineKeyboardButton(text="🔗 Подписаться", url=url)],
+        [InlineKeyboardButton(text="✅ Проверить подписку", callback_data="verify_sub")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
