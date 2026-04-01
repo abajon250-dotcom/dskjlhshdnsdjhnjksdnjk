@@ -127,11 +127,13 @@ def admin_menu_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=buttons, row_width=2)
 
 def subscription_keyboard():
-    """Клавиатура для проверки подписки (используется, если включена проверка)"""
+    """Клавиатура для проверки подписки"""
+    if not CHANNEL_ID:
+        # Если CHANNEL_ID не задан, возвращаем пустую клавиатуру
+        return InlineKeyboardMarkup(inline_keyboard=[])
     if CHANNEL_ID.startswith('@'):
         url = f"https://t.me/{CHANNEL_ID[1:]}"
     else:
-        # Для числового ID (например, -1001234567890)
         url = f"https://t.me/c/{str(CHANNEL_ID)[4:]}"
     buttons = [
         [InlineKeyboardButton(text="🔗 Подписаться", url=url)],

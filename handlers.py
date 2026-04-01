@@ -9,18 +9,10 @@ from sqlalchemy import func
 import keyboards as kb
 import models
 import crypto_api
-from config import ADMIN_IDS, CRYPTO_CURRENCY, CUSTOM_EMOJIS
+from config import ADMIN_IDS, CRYPTO_CURRENCY, CHANNEL_ID
 from log_utils import log_action
 
 dp = Dispatcher()
-
-async def is_subscribed(user_id: int, bot: Bot) -> bool:
-    try:
-        member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
-        return member.status in ["member", "administrator", "creator"]
-    except Exception as e:
-        print(f"Ошибка проверки подписки: {e}")
-        return False
 
 # ------------------ FSM ------------------
 class AddProduct(StatesGroup):
@@ -45,24 +37,53 @@ class AddTextSession(StatesGroup):
 class Broadcast(StatesGroup):
     text = State()
 
+class BanUser(StatesGroup):
+    user_id = State()
+    action = State()
+
 # ------------------ Helper ------------------
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
-def emoji_tag(emoji_id: str) -> str:
-    """Возвращает HTML-тег для кастомного эмодзи"""
-    return f'<tg-emoji emoji-id="{emoji_id}"></tg-emoji>'
+async def is_subscribed(user_id: int, bot: Bot) -> bool:
+    if not CHANNEL_ID:
+        return True  # если канал не задан, считаем подписанным
+    try:
+        member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
+        return member.status in ["member", "administrator", "creator"]
+    except Exception as e:
+        print(f"Ошибка проверки подписки: {e}")
+        return False
 
 # ------------------ Основные команды ------------------
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message, bot: Bot):
     user_id = message.from_user.id
+
+    # Проверка бана
+    with models.SessionLocal() as db:
+        user = db.query(models.User).filter_by(tg_id=user_id).first()
+        if user and user.is_banned:
+            await message.answer(
+                "🚫 Вы забанены и не можете пользоваться ботом.\n"
+                "Если считаете это ошибкой, обратитесь к администратору."
+            )
+            return
+
+    # Проверка подписки
     if not await is_subscribed(user_id, bot):
-        await message.answer(
-            "❌ Для использования бота необходимо подписаться на наш канал.\n\n"
-            "После подписки нажмите «Проверить подписку».",
-            reply_markup=kb.subscription_keyboard()
-        )
+        sub_kb = kb.subscription_keyboard()
+        if sub_kb:
+            await message.answer(
+                "❌ Для использования бота необходимо подписаться на наш канал.\n\n"
+                "После подписки нажмите «Проверить подписку».",
+                reply_markup=sub_kb
+            )
+        else:
+            await message.answer(
+                "❌ Для использования бота необходимо подписаться на наш канал.\n\n"
+                "Пожалуйста, подпишитесь и снова нажмите /start"
+            )
         return
 
     # Обработка реферальной ссылки
@@ -117,11 +138,7 @@ async def start_cmd(message: types.Message, bot: Bot):
                 pass
 
     await log_action(bot, user_id, "/start", "Запустил бота")
-    await message.answer(
-        f"{CUSTOM_EMOJIS.get('main_menu', '')} Добро пожаловать! Выберите действие:",
-        parse_mode="HTML",
-        reply_markup=kb.main_menu_keyboard()
-    )
+    await message.answer("Добро пожаловать! Выберите действие:", reply_markup=kb.main_menu_keyboard())
 
 @dp.callback_query(lambda c: c.data == "main_menu")
 async def main_menu_callback(callback: types.CallbackQuery, bot: Bot):
@@ -375,7 +392,7 @@ async def admin_stats(callback: types.CallbackQuery, bot: Bot):
         today = datetime.utcnow().date()
         purchases_today = db.query(models.Purchase).filter(func.date(models.Purchase.purchased_at) == today).count()
         text = (
-            f"{emoji_tag(CUSTOM_EMOJI.get('stats', ''))} <b>Статистика</b>\n\n"
+            f"📊 <b>Статистика</b>\n\n"
             f"👥 Пользователей: {total_users}\n"
             f"📦 Товаров: {total_products}\n"
             f"🔑 Всего сессий: {total_sessions}\n"
@@ -653,6 +670,27 @@ async def add_text_data(message: types.Message, state: FSMContext, bot: Bot):
         await message.answer(f"Текстовая сессия добавлена (контактов: {contacts_count}).", reply_markup=kb.admin_menu_keyboard())
     await state.clear()
 
+# ------------------ Проверка подписки ------------------
+@dp.callback_query(lambda c: c.data == "verify_sub")
+async def verify_subscription(callback: types.CallbackQuery, bot: Bot):
+    user_id = callback.from_user.id
+    if await is_subscribed(user_id, bot):
+        await callback.message.delete()
+        with models.SessionLocal() as db:
+            user = db.query(models.User).filter_by(tg_id=user_id).first()
+            if not user:
+                user = models.User(
+                    tg_id=user_id,
+                    username=callback.from_user.username,
+                    full_name=callback.from_user.full_name
+                )
+                db.add(user)
+                db.commit()
+        await callback.message.answer("Спасибо за подписку! Теперь вы можете пользоваться ботом.", reply_markup=kb.main_menu_keyboard())
+    else:
+        await callback.answer("Вы ещё не подписались. Пожалуйста, подпишитесь и нажмите снова.", show_alert=True)
+    await callback.answer()
+
 # ------------------ Рассылка ------------------
 @dp.callback_query(lambda c: c.data == "admin_broadcast")
 async def admin_broadcast_start(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
@@ -686,24 +724,74 @@ async def admin_broadcast_send(message: types.Message, state: FSMContext, bot: B
     await log_action(bot, message.from_user.id, "admin_broadcast", f"Рассылка: {sent} успешно, {failed} ошибок")
     await state.clear()
 
-    @dp.callback_query(lambda c: c.data == "verify_sub")
-    async def verify_subscription(callback: types.CallbackQuery, bot: Bot):
-        user_id = callback.from_user.id
-        if await is_subscribed(user_id, bot):
-            await callback.message.delete()
-            # регистрируем пользователя (повторяем логику старта)
-            with models.SessionLocal() as db:
-                user = db.query(models.User).filter_by(tg_id=user_id).first()
-                if not user:
-                    user = models.User(
-                        tg_id=user_id,
-                        username=callback.from_user.username,
-                        full_name=callback.from_user.full_name
-                    )
-                    db.add(user)
-                    db.commit()
-            await callback.message.answer("Спасибо за подписку! Теперь вы можете пользоваться ботом.",
-                                          reply_markup=kb.main_menu_keyboard())
+# ------------------ Бан/разбан ------------------
+@dp.callback_query(lambda c: c.data == "admin_ban")
+async def admin_ban_start(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Нет прав", show_alert=True)
+        return
+    await callback.message.edit_text("Введите Telegram ID пользователя для бана/разбана:")
+    await state.set_state(BanUser.user_id)
+    await callback.answer()
+
+@dp.message(BanUser.user_id)
+async def admin_ban_user_id(message: types.Message, state: FSMContext, bot: Bot):
+    try:
+        target_id = int(message.text.strip())
+        with models.SessionLocal() as db:
+            user = db.query(models.User).filter_by(tg_id=target_id).first()
+            if not user:
+                await message.answer("Пользователь с таким ID не найден в базе.")
+                await state.clear()
+                return
+            current_status = "забанен" if user.is_banned else "не забанен"
+            await state.update_data(user_id=target_id, current_status=user.is_banned)
+            await message.answer(
+                f"Пользователь {user.full_name or user.username or target_id} (ID {target_id}) — {current_status}.\n"
+                "Что сделать?\n\n"
+                "1. Забанить — введите /ban\n"
+                "2. Разбанить — введите /unban"
+            )
+            await state.set_state(BanUser.action)
+    except ValueError:
+        await message.answer("ID должен быть числом. Попробуйте снова.")
+        await state.clear()
+
+@dp.message(BanUser.action)
+async def admin_ban_action(message: types.Message, state: FSMContext, bot: Bot):
+    action = message.text.lower()
+    if action not in ["/ban", "/unban"]:
+        await message.answer("Введите /ban или /unban")
+        return
+    data = await state.get_data()
+    target_id = data['user_id']
+    current_status = data['current_status']
+    if action == "/ban":
+        if current_status:
+            await message.answer("Пользователь уже забанен.")
         else:
-            await callback.answer("Вы ещё не подписались. Пожалуйста, подпишитесь и нажмите снова.", show_alert=True)
-        await callback.answer()
+            with models.SessionLocal() as db:
+                user = db.query(models.User).filter_by(tg_id=target_id).first()
+                user.is_banned = True
+                db.commit()
+                await log_action(bot, message.from_user.id, "admin_ban", f"Забанен пользователь {target_id}")
+                await message.answer(f"Пользователь {target_id} забанен.")
+                try:
+                    await bot.send_message(target_id, "🚫 Вы были забанены администратором. Доступ к боту закрыт.")
+                except:
+                    pass
+    elif action == "/unban":
+        if not current_status:
+            await message.answer("Пользователь не забанен.")
+        else:
+            with models.SessionLocal() as db:
+                user = db.query(models.User).filter_by(tg_id=target_id).first()
+                user.is_banned = False
+                db.commit()
+                await log_action(bot, message.from_user.id, "admin_unban", f"Разбанен пользователь {target_id}")
+                await message.answer(f"Пользователь {target_id} разбанен.")
+                try:
+                    await bot.send_message(target_id, "✅ Вы были разбанены. Теперь вы можете пользоваться ботом.")
+                except:
+                    pass
+    await state.clear()
