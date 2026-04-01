@@ -103,7 +103,7 @@ async def start_cmd(message: types.Message, bot: Bot):
 
     await log_action(bot, user_id, "/start", "Запустил бота")
     await message.answer(
-        f"Добро пожаловать! {emoji_tag(CUSTOM_EMOJIS.get('stats', ''))} Выберите действие:",
+        f"{CUSTOM_EMOJIS.get('main_menu', '')} Добро пожаловать! Выберите действие:",
         parse_mode="HTML",
         reply_markup=kb.main_menu_keyboard()
     )

@@ -18,11 +18,11 @@ ADMIN_LOG_CHAT_IDS = [int(x.strip()) for x in os.getenv("ADMIN_LOG_CHAT_IDS", ""
 # Кастомные эмодзи
 CUSTOM_EMOJI_IDS = {
     "catalog": "6019248093835302806",
-    "my purchases": "6021650913289050282",
-    "my referrals": "5298668674532538341",
-    "main menu": "6039539366177541657",
+    "my_purchases": "6021650913289050282",
+    "my_referrals": "5298668674532538341",
+    "main_menu": "6039539366177541657",
     "pay": "5255933397750014894",
-    "go to payment": "5195058841988914267",
-    "check payment": "5197653448912293869"
+    "go_to_payment": "5195058841988914267",
+    "check_payment": "5197653448912293869"
 }
 CUSTOM_EMOJIS = {key: f'<tg-emoji emoji-id="{CUSTOM_EMOJI_IDS[key]}">😎</tg-emoji>' for key in CUSTOM_EMOJI_IDS}
