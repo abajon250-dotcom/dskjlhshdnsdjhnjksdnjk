@@ -1,5 +1,6 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import CUSTOM_EMOJI_IDS
+from config import CHANNEL_ID
 
 def main_menu_keyboard():
     buttons = [
