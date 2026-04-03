@@ -4,7 +4,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import BufferedInputFile
+from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy import func
 import keyboards as kb
 import models
@@ -65,30 +65,24 @@ async def start_cmd(message: types.Message, bot: Bot):
         user = db.query(models.User).filter_by(tg_id=user_id).first()
         if user and user.is_banned:
             await message.answer(
-                "🚫 <b>Вы забанены</b>\n\n"
-                "Вы не можете пользоваться ботом.\n"
-                "Если считаете это ошибкой, обратитесь к администратору.",
-                parse_mode="HTML"
+                "🚫 Вы забанены и не можете пользоваться ботом.\n"
+                "Если считаете это ошибкой, обратитесь к администратору."
             )
             return
 
     # Проверка подписки
     if not await is_subscribed(user_id, bot):
         sub_kb = kb.subscription_keyboard()
-        if sub_kb.inline_keyboard:
+        if sub_kb:
             await message.answer(
-                "🔒 <b>Требуется подписка</b>\n\n"
-                "Для использования бота необходимо подписаться на наш канал.\n"
-                "После подписки нажмите кнопку «Проверить подписку».",
-                parse_mode="HTML",
+                "❌ Для использования бота необходимо подписаться на наш канал.\n\n"
+                "После подписки нажмите «Проверить подписку».",
                 reply_markup=sub_kb
             )
         else:
             await message.answer(
-                "🔒 <b>Требуется подписка</b>\n\n"
-                "Для использования бота необходимо подписаться на наш канал.\n"
-                "Пожалуйста, подпишитесь и снова нажмите /start",
-                parse_mode="HTML"
+                "❌ Для использования бота необходимо подписаться на наш канал.\n\n"
+                "Пожалуйста, подпишитесь и снова нажмите /start"
             )
         return
 
@@ -120,7 +114,7 @@ async def start_cmd(message: types.Message, bot: Bot):
             except ValueError:
                 pass
 
-    # Регистрация пользователя (если ещё не был)
+    # Регистрация пользователя
     with models.SessionLocal() as db:
         user = db.query(models.User).filter_by(tg_id=user_id).first()
         if not user:
@@ -156,8 +150,7 @@ async def start_cmd(message: types.Message, bot: Bot):
 async def main_menu_callback(callback: types.CallbackQuery, bot: Bot):
     await log_action(bot, callback.from_user.id, "main_menu", "Главное меню")
     await callback.message.edit_text(
-        "🏠 <b>Главное меню</b>\n\n"
-        "Выберите интересующий раздел:",
+        "✨ <b>Главное меню</b> ✨\n\nВыберите действие:",
         parse_mode="HTML",
         reply_markup=kb.main_menu_keyboard()
     )
@@ -167,17 +160,19 @@ async def main_menu_callback(callback: types.CallbackQuery, bot: Bot):
 async def show_catalog(callback: types.CallbackQuery, bot: Bot):
     await log_action(bot, callback.from_user.id, "catalog", "Открыл каталог")
     with models.SessionLocal() as db:
-        products = db.query(models.Product).filter_by(is_active=True).all()
+        # Только товары, у которых есть хотя бы одна непроданная сессия
+        products = db.query(models.Product).filter(
+            models.Product.is_active == True,
+            models.Product.sessions.any(models.Session.is_sold == False)
+        ).all()
         if not products:
             await callback.message.edit_text(
-                "📭 <b>Товаров пока нет</b>\n\n"
-                "Загляните позже, мы пополняем ассортимент!",
+                "📭 <b>Товаров пока нет</b>\n\nВсе доступные аккаунты проданы. Загляните позже!",
                 parse_mode="HTML"
             )
             return
         await callback.message.edit_text(
-            "📂 <b>Наши товары</b>\n\n"
-            "Выберите интересующий вас аккаунт:",
+            "📂 <b>Наши товары</b>\n\nВыберите интересующий вас аккаунт:",
             parse_mode="HTML",
             reply_markup=kb.catalog_keyboard(products)
         )
@@ -190,22 +185,14 @@ async def buy_product(callback: types.CallbackQuery, bot: Bot):
     with models.SessionLocal() as db:
         product = db.query(models.Product).filter_by(id=product_id, is_active=True).first()
         if not product:
-            await callback.message.edit_text(
-                "❌ <b>Товар не найден</b>\n\n"
-                "Возможно, он был удалён.",
-                parse_mode="HTML"
-            )
+            await callback.message.edit_text("❌ Товар не найден.")
             return
         free_sessions = db.query(models.Session).filter(
             models.Session.product_id == product_id,
             models.Session.is_sold == False
         ).all()
         if not free_sessions:
-            await callback.message.edit_text(
-                "😔 <b>Товар временно отсутствует</b>\n\n"
-                "Попробуйте позже.",
-                parse_mode="HTML"
-            )
+            await callback.message.edit_text("К сожалению, товар временно отсутствует.")
             return
         min_contacts = min(s.contacts_count for s in free_sessions)
         max_contacts = max(s.contacts_count for s in free_sessions)
@@ -216,11 +203,7 @@ async def buy_product(callback: types.CallbackQuery, bot: Bot):
             f"💵 Цена: <code>{product.price} {product.currency}</code>\n\n"
             "💳 После оплаты вы получите доступ к аккаунту."
         )
-        await callback.message.edit_text(
-            text,
-            parse_mode="HTML",
-            reply_markup=kb.product_detail_keyboard(product_id)
-        )
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb.product_detail_keyboard(product_id))
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data.startswith("pay_"))
@@ -235,26 +218,19 @@ async def create_invoice(callback: types.CallbackQuery, bot: Bot):
             db.commit()
         product = db.query(models.Product).filter_by(id=product_id, is_active=True).first()
         if not product:
-            await callback.message.edit_text("❌ Товар не найден.", parse_mode="HTML")
+            await callback.message.edit_text("❌ Товар не найден.")
             return
         free_session = db.query(models.Session).filter(
             models.Session.product_id == product_id,
             models.Session.is_sold == False
         ).first()
         if not free_session:
-            await callback.message.edit_text(
-                "😔 <b>Товар закончился</b>\n\n"
-                "Попробуйте другой товар.",
-                parse_mode="HTML"
-            )
+            await callback.message.edit_text("Товар закончился.")
             return
         try:
             invoice_id, pay_url = await crypto_api.create_invoice(product.price, product.currency)
         except Exception as e:
-            await callback.message.edit_text(
-                f"⚠️ <b>Ошибка при создании счёта</b>\n\n{str(e)}",
-                parse_mode="HTML"
-            )
+            await callback.message.edit_text(f"⚠️ Ошибка при создании счёта: {e}")
             return
         invoice = models.Invoice(
             user_id=user.id,
@@ -267,9 +243,8 @@ async def create_invoice(callback: types.CallbackQuery, bot: Bot):
         db.add(invoice)
         db.commit()
         await callback.message.edit_text(
-            "💳 <b>Счёт создан</b>\n\n"
-            f"Сумма: <code>{product.price} {product.currency}</code>\n\n"
-            "Оплатите по ссылке ниже, затем нажмите «Проверить оплату».",
+            f"💸 Счёт создан на сумму <b>{product.price} {product.currency}</b>\n\n"
+            f"Оплатите по ссылке ниже, затем нажмите «Проверить оплату».",
             parse_mode="HTML",
             reply_markup=kb.invoice_keyboard(pay_url, invoice.id)
         )
@@ -282,34 +257,36 @@ async def check_payment(callback: types.CallbackQuery, bot: Bot):
     with models.SessionLocal() as db:
         invoice = db.query(models.Invoice).filter_by(id=invoice_db_id).first()
         if not invoice:
-            await callback.message.edit_text("❌ Счёт не найден.", parse_mode="HTML")
+            await callback.message.edit_text("❌ Счёт не найден.")
             return
         if invoice.status == "paid":
-            await callback.message.edit_text(
-                "✅ <b>Этот счёт уже оплачен</b>\n\n"
-                "Вы уже получили товар.",
-                parse_mode="HTML"
-            )
+            await callback.message.edit_text("✅ Этот счёт уже оплачен.")
             return
         status = await crypto_api.check_invoice_status(invoice.crypto_invoice_id)
         if status == "paid":
             invoice.status = "paid"
             invoice.paid_at = datetime.utcnow()
+            # Ищем свободную сессию
             session = db.query(models.Session).filter(
                 models.Session.product_id == invoice.product_id,
                 models.Session.is_sold == False
             ).first()
             if not session:
                 await callback.message.edit_text(
-                    "⚠️ <b>Ошибка</b>\n\n"
-                    "Нет свободных сессий для этого товара. Обратитесь к администратору.",
+                    "⚠️ <b>Ошибка</b>\n\nНет свободных сессий для этого товара. Обратитесь к администратору.",
                     parse_mode="HTML"
                 )
                 await log_action(bot, callback.from_user.id, "no_session", f"Нет сессии для товара ID {invoice.product_id}")
                 return
             session.is_sold = True
+            purchase = models.Purchase(
+                user_id=invoice.user_id,
+                product_id=invoice.product_id,
+                session_id=session.id
+            )
+            db.add(purchase)
 
-            # Реферальный бонус
+            # Начисление реферального бонуса (если первая покупка)
             user = db.query(models.User).filter_by(id=invoice.user_id).first()
             purchases_count = db.query(models.Purchase).filter_by(user_id=user.id).count()
             if purchases_count == 0 and user.referred_by and user.referred_by != user.tg_id:
@@ -323,58 +300,56 @@ async def check_payment(callback: types.CallbackQuery, bot: Bot):
                     try:
                         await bot.send_message(
                             referrer.tg_id,
-                            f"🎉 <b>Реферальный бонус!</b>\n\n"
-                            f"Ваш реферал @{user.username or user.tg_id} совершил первую покупку на {invoice.amount} {invoice.currency}!\n"
-                            f"Вы получили бонус: <code>{bonus} {invoice.currency}</code>\n"
-                            f"Ваш бонусный баланс: <code>{referrer.referral_balance:.2f} {invoice.currency}</code>",
-                            parse_mode="HTML"
+                            f"🎉 Ваш реферал @{user.username or user.tg_id} совершил первую покупку на {invoice.amount} {invoice.currency}!\n"
+                            f"Вы получили бонус: {bonus} {invoice.currency}.\n"
+                            f"Ваш бонусный баланс: {referrer.referral_balance:.2f} {invoice.currency}"
                         )
                     except Exception as e:
                         print(f"Не удалось отправить сообщение рефереру: {e}")
 
-            purchase = models.Purchase(
-                user_id=invoice.user_id,
-                product_id=invoice.product_id,
-                session_id=session.id
-            )
-            db.add(purchase)
             db.commit()
 
-            # Отправка товара
+            # Отправка в зависимости от типа сессии
             if session.is_file and session.file_data:
                 await bot.send_document(
                     callback.message.chat.id,
                     document=BufferedInputFile(session.file_data, filename=session.filename),
-                    caption=f"✅ <b>Оплата получена!</b>\n\n"
-                            f"Ваш {invoice.product.name}\n"
-                            f"Контактов: {session.contacts_count}\n\n"
-                            f"<i>Сохраните файл для входа.</i>",
-                    parse_mode="HTML"
+                    caption=f"✅ Оплата получена!\n\nВаш {invoice.product.name}\nКонтактов: {session.contacts_count}"
                 )
                 instruction = (
-                    "📱 <b>Инструкция для ПК (Windows):</b>\n"
+                    "📱 *Инструкция для ПК (Windows):*\n"
                     "1. Скачайте Telegram Desktop.\n"
                     "2. Замените папку tdata в %AppData%\\Telegram Desktop\\ на полученную.\n"
                     "3. Запустите Telegram Desktop, войдите автоматически.\n\n"
-                    "📱 <b>Инструкция для Android:</b>\n"
+                    "📱 *Инструкция для Android:*\n"
                     "1. Установите Telegram.\n"
                     "2. Скопируйте папку tdata в /storage/emulated/0/Telegram/ (или в папку приложения).\n"
                     "3. Откройте Telegram, войдите.\n\n"
-                    "⚠️ <i>Важно: Не меняйте и не удаляйте файлы в папке tdata.</i>"
+                    "⚠️ *Важно:* Не меняйте и не удаляйте файлы в папке tdata."
                 )
-                await bot.send_message(callback.message.chat.id, instruction, parse_mode="HTML")
+                await bot.send_message(callback.message.chat.id, instruction, parse_mode="Markdown")
                 await callback.message.delete()
             else:
                 await callback.message.edit_text(
                     f"✅ <b>Оплата получена!</b>\n\n"
-                    f"Ваш {invoice.product.name}:\n"
-                    f"<code>{session.data}</code>\n"
-                    f"Контактов: {session.contacts_count}\n\n"
-                    f"<i>Сохраните эти данные.</i>",
+                    f"🎉 Ваш <b>{invoice.product.name}</b>:\n"
+                    f"🔑 <code>{session.data}</code>\n"
+                    f"👥 Контактов: <b>{session.contacts_count}</b>\n\n"
+                    "📌 <i>Сохраните эти данные. Они не будут показаны снова.</i>",
                     parse_mode="HTML"
                 )
+
+            # Предложить обновить каталог (чтобы убрать купленный товар, если он стал недоступен)
+            await bot.send_message(
+                callback.message.chat.id,
+                "🔄 <b>Каталог обновлён?</b>\nНажмите кнопку, чтобы увидеть актуальные товары:",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🛍 Обновить каталог", callback_data="catalog")]
+                ])
+            )
         else:
-            await callback.answer("Платёж ещё не получен. Попробуйте позже.", show_alert=True)
+            await callback.answer("⏳ Платёж ещё не получен. Попробуйте позже.", show_alert=True)
 
 @dp.callback_query(lambda c: c.data == "my_purchases")
 async def my_purchases(callback: types.CallbackQuery, bot: Bot):
