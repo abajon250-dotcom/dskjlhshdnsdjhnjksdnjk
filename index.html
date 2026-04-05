@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KRT SHOP – магазин аккаунтов</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .card {
+            background: rgba(255,255,255,0.95);
+            border-radius: 25px;
+            max-width: 500px;
+            width: 100%;
+            padding: 30px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.2);
+            text-align: center;
+            transition: transform 0.3s;
+        }
+        .card:hover { transform: translateY(-5px); }
+        h1 { color: #333; margin-bottom: 10px; }
+        .status {
+            font-size: 1.2em;
+            margin: 20px 0;
+            padding: 10px;
+            border-radius: 50px;
+            background: #f0f0f0;
+        }
+        .online { color: #28a745; font-weight: bold; }
+        .offline { color: #dc3545; font-weight: bold; }
+        .stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin: 25px 0;
+        }
+        .stat-card {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 15px;
+        }
+        .stat-number {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #007bff;
+        }
+        .button {
+            display: inline-block;
+            background: #0088cc;
+            color: white;
+            text-decoration: none;
+            padding: 12px 30px;
+            border-radius: 40px;
+            font-weight: bold;
+            margin-top: 15px;
+            transition: 0.2s;
+        }
+        .button:hover { background: #006699; transform: scale(1.02); }
+        .footer {
+            margin-top: 25px;
+            font-size: 0.8em;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>🤖 KRT SHOP</h1>
+        <p>Покупайте аккаунты Telegram и VK с балансом и промокодами</p>
+        
+        <div class="status">
+            Статус бота: <span id="botStatus" class="offline">проверка...</span>
+        </div>
+
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-number" id="usersCount">-</div>
+                <div>Пользователей</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="productsCount">-</div>
+                <div>Товаров</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="soldCount">-</div>
+                <div>Продано</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="depositsCount">-</div>
+                <div>Пополнено (USDT)</div>
+            </div>
+        </div>
+
+        <a href="https://t.me/KRTSHOP3bot" class="button">👉 Открыть бота</a>
+        <div class="footer">
+            Актуальная версия: 3.0 | Поддержка: @bloodworn
+        </div>
+    </div>
+
+    <script>
+        async function fetchStats() {
+            // Замените URL на ваш реальный адрес веб‑сервера (например, https://ваш-проект.railway.app/stats)
+            const API_URL = 'https://ваш-проект.railway.app/stats';
+            try {
+                const response = await fetch(API_URL);
+                const data = await response.json();
+                if (data.status === 'online') {
+                    document.getElementById('botStatus').innerHTML = '✅ онлайн';
+                    document.getElementById('botStatus').className = 'online';
+                } else {
+                    document.getElementById('botStatus').innerHTML = '❌ оффлайн';
+                }
+                document.getElementById('usersCount').innerText = data.total_users || 0;
+                document.getElementById('productsCount').innerText = data.total_products || 0;
+                document.getElementById('soldCount').innerText = data.sold_sessions || 0;
+                document.getElementById('depositsCount').innerText = (data.total_deposits || 0).toFixed(2);
+            } catch(e) {
+                document.getElementById('botStatus').innerHTML = '❌ ошибка соединения';
+                console.error(e);
+            }
+        }
+        fetchStats();
+        setInterval(fetchStats, 60000); // обновление каждую минуту
+    </script>
+</body>
+</html>

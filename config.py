@@ -8,6 +8,6 @@ CRYPTOBOT_TOKEN = os.getenv("CRYPTOBOT_TOKEN")
 if not CRYPTOBOT_TOKEN: raise ValueError("CRYPTOBOT_TOKEN не задан")
 CRYPTO_CURRENCY = os.getenv("CRYPTO_CURRENCY", "USDT")
 ADMIN_LOG_CHAT_IDS = [int(x.strip()) for x in os.getenv("ADMIN_LOG_CHAT_IDS", "").split(",") if x.strip()]
-CUSTOM_EMOJI = {"catalog":"🛍","my_purchases":"📦","my_referrals":"👥","balance":"💰","pay":"💸","back":"🔙","stats":"📊","broadcast":"📢","ban":"🔨","promo":"🎟"}
 CHANNEL_ID = os.getenv("CHANNEL_ID", "")
 PRODUCTS_PER_PAGE = 5
+CUSTOM_EMOJI = {"catalog":"🛍","my_purchases":"📦","my_referrals":"👥","balance":"💰","pay":"💸","back":"🔙","stats":"📊","broadcast":"📢","ban":"🔨","promo":"🎟"}
