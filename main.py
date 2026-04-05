@@ -1,5 +1,4 @@
-import asyncio
-import logging
+import asyncio, logging
 from aiogram import Bot
 from config import BOT_TOKEN
 from handlers import dp
