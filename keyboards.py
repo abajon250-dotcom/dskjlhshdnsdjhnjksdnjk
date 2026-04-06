@@ -1,12 +1,12 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from config import CUSTOM_EMOJI, CHANNEL_ID, PRODUCTS_PER_PAGE
+from config import CHANNEL_ID, PRODUCTS_PER_PAGE
 
 def main_menu_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"{CUSTOM_EMOJI.get('catalog','🛍')} Каталог", callback_data="catalog")],
-        [InlineKeyboardButton(text=f"{CUSTOM_EMOJI.get('my_purchases','📦')} Мои покупки", callback_data="my_purchases")],
-        [InlineKeyboardButton(text=f"{CUSTOM_EMOJI.get('balance','💰')} Баланс", callback_data="balance_menu")],
-        [InlineKeyboardButton(text=f"{CUSTOM_EMOJI.get('my_referrals','👥')} Мои рефералы", callback_data="my_referrals")]
+        [InlineKeyboardButton(text="🛍 Каталог", callback_data="catalog")],
+        [InlineKeyboardButton(text="📦 Мои покупки", callback_data="my_purchases")],
+        [InlineKeyboardButton(text="💰 Баланс", callback_data="balance_menu")],
+        [InlineKeyboardButton(text="👥 Мои рефералы", callback_data="my_referrals")]
     ])
 
 def balance_keyboard():
