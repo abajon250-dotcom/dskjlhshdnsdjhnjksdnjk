@@ -92,7 +92,7 @@ async def start_cmd(message: types.Message, bot: Bot):
             except: pass
     await log_action(bot, user_id, "/start", "Запустил бота")
     await message.answer(
-        f"{emoji_tag(CUSTOM_EMOJI.get('welcome', '5274099962655816924'))} <b>Добро пожаловать в KRT SHOP</b>\n\n"
+        f"{emoji_tag(CUSTOM_EMOJI.get('welcome', '5274099962655816724'))} <b>Добро пожаловать в KRT SHOP</b>\n\n"
         "🎁 <b>Что мы предлагаем:</b>\n"
         "• Аккаунты Telegram (tdata / файл сессии)\n"
         "• Аккаунты VK (логин:пароль)\n"
