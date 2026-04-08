@@ -1,7 +1,7 @@
 import asyncio, json
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton
@@ -31,7 +31,7 @@ class ChangeProductPrice(StatesGroup): product_id = State(); new_price = State()
 class WithdrawBalance(StatesGroup): amount = State(); wallet = State()
 class VKAddAccount(StatesGroup): token = State()
 class VKAddTemplate(StatesGroup): name = State(); text = State()
-class VKStartSpam(StatesGroup): account_id = State(); template_id = State(); recipients_type = State(); interval = State()
+class VKStartSpam(StatesGroup): account_id = State(); template_id = State(); recipients_type = State(); interval = State(); custom_list = State()
 
 # ------------------ Helper ------------------
 def is_admin(user_id: int) -> bool: return user_id in ADMIN_IDS
@@ -379,7 +379,7 @@ async def check_payment(callback: types.CallbackQuery, bot: Bot):
                     f"Контактов: {session.contacts_count}",
                     parse_mode="HTML"
                 )
-            # Реферальный бонус
+            # Реферальный бонус (исправлено)
             purchases_count = db.query(models.Purchase).filter_by(user_id=user.id).count()
             if purchases_count == 1 and user.referred_by:
                 referrer = db.query(models.User).filter_by(tg_id=user.referred_by).first()
@@ -516,8 +516,7 @@ async def withdraw_wallet(message: types.Message, state: FSMContext, bot: Bot):
         await message.answer(f"✅ Заявка на вывод {amount} {CRYPTO_CURRENCY} отправлена администраторам. Деньги будут переведены в ближайшее время.")
     await state.clear()
 
-# ------------------ Чат поддержки ------------------
-support_messages = {}
+# ------------------ Чат поддержки (фикс отправки админам) ------------------
 @dp.callback_query(lambda c: c.data == "support")
 async def support_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text("💬 Напишите ваше сообщение администратору.\n\nЧтобы отменить, нажмите /cancel")
@@ -532,11 +531,22 @@ async def support_send(message: types.Message, state: FSMContext, bot: Bot):
         await message.answer("❌ Отменено.")
         await state.clear()
         return
+    # Получаем имя пользователя
+    with models.SessionLocal() as db:
+        user = db.query(models.User).filter_by(tg_id=user_id).first()
+        username = f"@{user.username}" if user and user.username else str(user_id)
+    # Отправляем всем админам
     for admin_id in ADMIN_IDS:
         try:
-            await bot.send_message(admin_id, f"📩 <b>Новое сообщение от пользователя</b>\n👤 {user_id}\n💬 {text}\n\nЧтобы ответить, используйте:\n/reply_{user_id} <текст>", parse_mode="HTML")
-        except:
-            pass
+            await bot.send_message(admin_id,
+                f"📩 <b>Новое сообщение от пользователя</b>\n"
+                f"👤 {username} (ID {user_id})\n"
+                f"💬 {text}\n\n"
+                f"<i>Чтобы ответить, используйте команду:</i>\n"
+                f"/reply_{user_id} <текст>",
+                parse_mode="HTML")
+        except Exception as e:
+            print(f"Не удалось отправить админу {admin_id}: {e}")
     await message.answer("✅ Сообщение отправлено администратору. Ожидайте ответа.")
     await state.clear()
 
@@ -1144,7 +1154,7 @@ async def admin_import_data_file(message: types.Message, state: FSMContext, bot:
         await message.answer("✅ Данные импортированы", reply_markup=kb.admin_menu_keyboard())
     await state.clear()
 
-# ------------------ VK Спаммер ------------------
+# ------------------ VK Спаммер (через кнопки) ------------------
 @dp.callback_query(lambda c: c.data == "vk_spammer_menu")
 async def vk_spammer_menu(callback: types.CallbackQuery, bot: Bot):
     if not await check_vk_subscription(callback.from_user.id):
@@ -1311,19 +1321,37 @@ async def vk_use_template(callback: types.CallbackQuery, state: FSMContext):
 async def vk_spam_select_account(callback: types.CallbackQuery, state: FSMContext):
     account_id = int(callback.data.split("_")[-1])
     await state.update_data(account_id=account_id)
-    await callback.message.edit_text("🎯 Выберите тип получателей:\n\n/friends - все друзья\n/groups - все группы\n/followers - все подписчики\n/list - свой список ID через запятую")
+    await callback.message.edit_text("🎯 Выберите тип получателей:\n\n/friends - все друзья\n/list - свой список ID через запятую")
     await state.set_state(VKStartSpam.recipients_type)
     await callback.answer()
 
 @dp.message(VKStartSpam.recipients_type)
 async def vk_spam_recipients_type(message: types.Message, state: FSMContext, bot: Bot):
     rt = message.text.lower()
-    if rt not in ["/friends", "/groups", "/followers", "/list"]:
-        await message.answer("❌ Введите /friends, /groups, /followers или /list")
+    if rt not in ["/friends", "/list"]:
+        await message.answer("❌ Введите /friends или /list")
         return
-    await state.update_data(recipients_type=rt)
-    await message.answer("⏱ Введите интервал между сообщениями в секундах (например, 30):")
-    await state.set_state(VKStartSpam.interval)
+    if rt == "/list":
+        await message.answer("📝 Введите список ID получателей через запятую (например, 123,456,789):")
+        await state.set_state(VKStartSpam.custom_list)
+    else:
+        await state.update_data(recipients_type=rt)
+        await message.answer("⏱ Введите интервал между сообщениями в секундах (например, 30):")
+        await state.set_state(VKStartSpam.interval)
+
+@dp.message(VKStartSpam.custom_list)
+async def vk_spam_list(message: types.Message, state: FSMContext, bot: Bot):
+    custom_list = message.text.strip()
+    try:
+        # Проверяем, что список состоит из чисел
+        ids = [int(x.strip()) for x in custom_list.split(',')]
+        if not ids:
+            raise ValueError
+        await state.update_data(recipients_type="list", custom_list=custom_list)
+        await message.answer("⏱ Введите интервал между сообщениями в секундах (например, 30):")
+        await state.set_state(VKStartSpam.interval)
+    except:
+        await message.answer("❌ Неверный формат. Введите ID через запятую, например: 123,456,789")
 
 @dp.message(VKStartSpam.interval)
 async def vk_spam_interval(message: types.Message, state: FSMContext, bot: Bot):
@@ -1336,6 +1364,7 @@ async def vk_spam_interval(message: types.Message, state: FSMContext, bot: Bot):
         account_id = data['account_id']
         template_id = data['template_id']
         recipients_type = data['recipients_type']
+        custom_list = data.get('custom_list')
         user_id = message.from_user.id
         with models.SessionLocal() as db:
             user = db.query(models.User).filter_by(tg_id=user_id).first()
@@ -1350,23 +1379,13 @@ async def vk_spam_interval(message: types.Message, state: FSMContext, bot: Bot):
                 await state.clear()
                 return
             # Получаем список получателей
-            client = VKClient(account.access_token)
             if recipients_type == "/friends":
+                client = VKClient(account.access_token)
                 recipients = await client.get_friends_ids()
                 recipients_str = "friends"
-            elif recipients_type == "/groups":
-                # Получаем группы (id групп) – можно расширить
-                await message.answer("❌ Рассылка по группам временно недоступна.")
-                await state.clear()
-                return
-            elif recipients_type == "/followers":
-                await message.answer("❌ Рассылка по подписчикам временно недоступна.")
-                await state.clear()
-                return
-            else:  # /list
-                await message.answer("Введите список ID получателей через запятую (например, 123,456,789):")
-                await state.set_state("vk_spam_list")
-                return
+            else:  # list
+                recipients = [int(x.strip()) for x in custom_list.split(',')]
+                recipients_str = custom_list
             # Создаём задачу
             task = models.VKSpamTask(
                 user_id=user.id,
@@ -1378,8 +1397,169 @@ async def vk_spam_interval(message: types.Message, state: FSMContext, bot: Bot):
             )
             db.add(task); db.commit()
             await log_action(bot, user_id, "vk_create_spam_task", f"Задача #{task.id}, получателей: {len(recipients)}")
-            await message.answer(f"✅ Задача на рассылку создана (ID {task.id}).\nСтатус: {task.status}\nДля запуска используйте /vk_start_task {task.id}")
+            await message.answer(f"✅ Задача на рассылку создана (ID {task.id}).\nСтатус: {task.status}\nДля запуска используйте кнопку «Мои задачи» → выберите задачу → «Запустить».")
         await state.clear()
     except Exception as e:
         await message.answer(f"Ошибка: {e}")
         await state.clear()
+
+@dp.callback_query(lambda c: c.data == "vk_my_tasks")
+async def vk_my_tasks(callback: types.CallbackQuery, bot: Bot):
+    if not await check_vk_subscription(callback.from_user.id):
+        await callback.answer("Нет подписки", show_alert=True); return
+    user_id = callback.from_user.id
+    with models.SessionLocal() as db:
+        user = db.query(models.User).filter_by(tg_id=user_id).first()
+        tasks = db.query(models.VKSpamTask).filter_by(user_id=user.id).order_by(models.VKSpamTask.created_at.desc()).all()
+        if not tasks:
+            await callback.message.edit_text("У вас нет задач на рассылку.", reply_markup=kb.vk_spammer_menu_keyboard())
+            return
+        await callback.message.edit_text("📋 <b>Ваши задачи на рассылку</b>", parse_mode="HTML", reply_markup=kb.vk_tasks_keyboard(tasks))
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("vk_task_"))
+async def vk_task_detail(callback: types.CallbackQuery, bot: Bot):
+    task_id = int(callback.data.split("_")[-1])
+    user_id = callback.from_user.id
+    with models.SessionLocal() as db:
+        user = db.query(models.User).filter_by(tg_id=user_id).first()
+        task = db.query(models.VKSpamTask).filter_by(id=task_id, user_id=user.id).first()
+        if not task:
+            await callback.answer("Задача не найдена", show_alert=True); return
+        template = task.template
+        account = task.vk_account
+        text = f"📋 <b>Задача #{task.id}</b>\n\n"
+        text += f"👤 Аккаунт VK: {account.vk_username} (ID {account.vk_user_id})\n"
+        text += f"📝 Шаблон: {template.name}\n"
+        text += f"🎯 Получатели: {task.recipients}\n"
+        text += f"⏱ Интервал: {task.interval_seconds} сек\n"
+        text += f"📊 Отправлено: {task.total_sent}, ошибок: {task.total_failed}\n"
+        text += f"⏳ Статус: {task.status}\n"
+        text += f"🕒 Создана: {task.created_at.strftime('%d.%m.%Y %H:%M')}\n"
+        if task.started_at:
+            text += f"▶️ Запущена: {task.started_at.strftime('%d.%m.%Y %H:%M')}\n"
+        if task.completed_at:
+            text += f"✅ Завершена: {task.completed_at.strftime('%d.%m.%Y %H:%M')}\n"
+        # Кнопки управления
+        buttons = []
+        if task.status == "pending":
+            buttons.append([InlineKeyboardButton(text="▶️ Запустить", callback_data=f"vk_task_start_{task.id}")])
+        if task.status == "running":
+            buttons.append([InlineKeyboardButton(text="⏸ Пауза", callback_data=f"vk_task_pause_{task.id}")])
+        if task.status in ["running", "paused"]:
+            buttons.append([InlineKeyboardButton(text="⏹ Остановить", callback_data=f"vk_task_stop_{task.id}")])
+        buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="vk_my_tasks")])
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("vk_task_start_"))
+async def vk_task_start(callback: types.CallbackQuery, bot: Bot):
+    task_id = int(callback.data.split("_")[-1])
+    user_id = callback.from_user.id
+    with models.SessionLocal() as db:
+        user = db.query(models.User).filter_by(tg_id=user_id).first()
+        task = db.query(models.VKSpamTask).filter_by(id=task_id, user_id=user.id).first()
+        if not task or task.status != "pending":
+            await callback.answer("Невозможно запустить", show_alert=True); return
+        task.status = "running"
+        task.started_at = datetime.utcnow()
+        db.commit()
+        # Запускаем рассылку в фоне (простейший вариант, для реального использования нужен отдельный поток/задача)
+        asyncio.create_task(run_vk_spam(task.id, bot))
+        await callback.answer("Запущено", show_alert=True)
+        await callback.message.edit_text("Рассылка запущена, следите за статусом в списке задач.", reply_markup=kb.vk_spammer_menu_keyboard())
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("vk_task_pause_"))
+async def vk_task_pause(callback: types.CallbackQuery, bot: Bot):
+    task_id = int(callback.data.split("_")[-1])
+    user_id = callback.from_user.id
+    with models.SessionLocal() as db:
+        user = db.query(models.User).filter_by(tg_id=user_id).first()
+        task = db.query(models.VKSpamTask).filter_by(id=task_id, user_id=user.id).first()
+        if not task or task.status != "running":
+            await callback.answer("Невозможно поставить на паузу", show_alert=True); return
+        task.status = "paused"
+        db.commit()
+        await callback.answer("Поставлено на паузу", show_alert=True)
+        await callback.message.edit_text("Рассылка приостановлена.", reply_markup=kb.vk_spammer_menu_keyboard())
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("vk_task_stop_"))
+async def vk_task_stop(callback: types.CallbackQuery, bot: Bot):
+    task_id = int(callback.data.split("_")[-1])
+    user_id = callback.from_user.id
+    with models.SessionLocal() as db:
+        user = db.query(models.User).filter_by(tg_id=user_id).first()
+        task = db.query(models.VKSpamTask).filter_by(id=task_id, user_id=user.id).first()
+        if not task or task.status not in ["running", "paused"]:
+            await callback.answer("Невозможно остановить", show_alert=True); return
+        task.status = "cancelled"
+        task.completed_at = datetime.utcnow()
+        db.commit()
+        await callback.answer("Остановлено", show_alert=True)
+        await callback.message.edit_text("Рассылка остановлена.", reply_markup=kb.vk_spammer_menu_keyboard())
+    await callback.answer()
+
+# Фоновая функция для выполнения рассылки VK
+async def run_vk_spam(task_id: int, bot: Bot):
+    await asyncio.sleep(1)  # небольшая задержка
+    with models.SessionLocal() as db:
+        task = db.query(models.VKSpamTask).filter_by(id=task_id).first()
+        if not task or task.status != "running":
+            return
+        account = task.vk_account
+        template = task.template
+        client = VKClient(account.access_token)
+        # Получаем список получателей
+        if task.recipients == "friends":
+            recipients = await client.get_friends_ids()
+        else:
+            try:
+                recipients = [int(x.strip()) for x in task.recipients.split(',')]
+            except:
+                recipients = []
+        if not recipients:
+            task.status = "completed"
+            task.completed_at = datetime.utcnow()
+            db.commit()
+            # Уведомляем пользователя
+            user = db.query(models.User).filter_by(id=task.user_id).first()
+            if user:
+                await bot.send_message(user.tg_id, f"❌ Задача #{task.id} завершена с ошибкой: нет получателей.")
+            return
+        total = len(recipients)
+        sent = 0
+        failed = 0
+        for i, user_id_vk in enumerate(recipients):
+            # Проверяем статус перед каждой отправкой
+            task = db.query(models.VKSpamTask).filter_by(id=task_id).first()
+            if task.status != "running":
+                break
+            try:
+                await client.send_message(user_id_vk, template.text)
+                sent += 1
+                task.total_sent = sent
+                # Лог успеха
+                log = models.VKSpamLog(task_id=task.id, recipient_id=user_id_vk, status="sent")
+                db.add(log)
+                db.commit()
+            except Exception as e:
+                failed += 1
+                task.total_failed = failed
+                log = models.VKSpamLog(task_id=task.id, recipient_id=user_id_vk, status="failed", error=str(e))
+                db.add(log)
+                db.commit()
+            # Интервал
+            if i < total - 1:
+                await asyncio.sleep(task.interval_seconds)
+        # Завершаем задачу
+        task = db.query(models.VKSpamTask).filter_by(id=task_id).first()
+        if task.status == "running":
+            task.status = "completed"
+            task.completed_at = datetime.utcnow()
+            db.commit()
+        # Уведомляем пользователя
+        user = db.query(models.User).filter_by(id=task.user_id).first()
+        if user:
+            await bot.send_message(user.tg_id, f"✅ Рассылка по задаче #{task.id} завершена.\n📨 Отправлено: {sent}\n❌ Ошибок: {failed}")
