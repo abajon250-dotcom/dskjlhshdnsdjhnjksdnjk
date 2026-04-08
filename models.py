@@ -16,14 +16,13 @@ class User(Base):
     full_name = Column(String, nullable=True)
     is_admin = Column(Boolean, default=False)
     is_banned = Column(Boolean, default=False)
-    balance = Column(Float, default=0.0)                 # основной баланс (для покупок)
-    referral_balance = Column(Float, default=0.0)       # бонусный баланс (выводимый)
+    balance = Column(Float, default=0.0)
+    referral_balance = Column(Float, default=0.0)
     total_referral_earnings = Column(Float, default=0.0)
     referral_count = Column(Integer, default=0)
     referred_by = Column(Integer, ForeignKey('users.tg_id'), nullable=True)
-    # Подписка на VK спаммер (хранится прямо в User, чтобы не зависеть от наличия VK аккаунта)
     vk_spammer_subscription_expires = Column(DateTime, nullable=True)
-    # Связи
+
     purchases = relationship("Purchase", back_populates="user")
     invoices = relationship("Invoice", back_populates="user")
     logs = relationship("Log", back_populates="user")
@@ -47,8 +46,8 @@ class Session(Base):
     __tablename__ = 'sessions'
     id = Column(Integer, primary_key=True)
     product_id = Column(Integer, ForeignKey('products.id'), nullable=False)
-    data = Column(Text, nullable=True)            # текст для VK
-    file_data = Column(LargeBinary, nullable=True) # zip для Telegram
+    data = Column(Text, nullable=True)
+    file_data = Column(LargeBinary, nullable=True)
     filename = Column(String, nullable=True)
     is_file = Column(Boolean, default=False)
     contacts_count = Column(Integer, default=0)
@@ -92,17 +91,6 @@ class Log(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     user = relationship("User", back_populates="logs")
 
-class Transaction(Base):
-    __tablename__ = 'transactions'
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
-    amount = Column(Float, nullable=False)
-    currency = Column(String, default="USDT")
-    type = Column(String, nullable=False)  # deposit, purchase, bonus, withdrawal
-    description = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    user = relationship("User", back_populates="transactions")
-
 class PromoCode(Base):
     __tablename__ = 'promocodes'
     id = Column(Integer, primary_key=True)
@@ -124,6 +112,24 @@ class PromoCodeActivation(Base):
     user = relationship("User")
     promo = relationship("PromoCode", back_populates="activations")
 
+class Backup(Base):
+    __tablename__ = 'backups'
+    id = Column(Integer, primary_key=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    data = Column(Text, nullable=False)
+    note = Column(String, nullable=True)
+
+class Transaction(Base):
+    __tablename__ = 'transactions'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    amount = Column(Float, nullable=False)
+    currency = Column(String, default="USDT")
+    type = Column(String, nullable=False)
+    description = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    user = relationship("User", back_populates="transactions")
+
 class VKAccount(Base):
     __tablename__ = 'vk_accounts'
     id = Column(Integer, primary_key=True)
@@ -134,6 +140,8 @@ class VKAccount(Base):
     friends_count = Column(Integer, default=0)
     groups_count = Column(Integer, default=0)
     followers_count = Column(Integer, default=0)
+    subscription_expires = Column(DateTime, nullable=True)
+    is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     user = relationship("User", back_populates="vk_accounts")
     spam_tasks = relationship("VKSpamTask", back_populates="vk_account")
@@ -154,7 +162,7 @@ class VKSpamTask(Base):
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     vk_account_id = Column(Integer, ForeignKey('vk_accounts.id'), nullable=False)
     template_id = Column(Integer, ForeignKey('vk_message_templates.id'), nullable=False)
-    recipients = Column(Text, nullable=False)  # 'friends', 'groups', 'followers' или список ID через запятую
+    recipients = Column(Text, nullable=False)
     interval_seconds = Column(Integer, default=30)
     total_sent = Column(Integer, default=0)
     total_failed = Column(Integer, default=0)
@@ -166,17 +174,15 @@ class VKSpamTask(Base):
     vk_account = relationship("VKAccount", back_populates="spam_tasks")
     template = relationship("VKMessageTemplate", back_populates="tasks")
 
-class WithdrawalRequest(Base):
-    __tablename__ = 'withdrawal_requests'
+class VKSpamLog(Base):
+    __tablename__ = 'vk_spam_logs'
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
-    amount = Column(Float, nullable=False)
-    wallet = Column(String, nullable=False)
-    status = Column(String, default='pending')  # pending, approved, rejected
-    created_at = Column(DateTime, default=datetime.utcnow)
-    processed_at = Column(DateTime, nullable=True)
-    user = relationship("User", back_populates="withdrawal_requests")
-
+    task_id = Column(Integer, ForeignKey('vk_spam_tasks.id'), nullable=False)
+    recipient_id = Column(Integer, nullable=False)
+    status = Column(String, nullable=False)
+    error = Column(String, nullable=True)
+    sent_at = Column(DateTime, default=datetime.utcnow)
+    task = relationship("VKSpamTask")
 
 class WithdrawalRequest(Base):
     __tablename__ = 'withdrawal_requests'
@@ -188,7 +194,7 @@ class WithdrawalRequest(Base):
     status = Column(String, default='pending')
     created_at = Column(DateTime, default=datetime.utcnow)
     processed_at = Column(DateTime, nullable=True)
-    user = relationship("User")
+    user = relationship("User", back_populates="withdrawal_requests")
 
 def init_db():
     Base.metadata.create_all(engine)
