@@ -115,7 +115,7 @@ def subscription_keyboard():
         [InlineKeyboardButton(text="✅ Проверить подписку", callback_data="verify_sub")]
     ])
 
-# ---------- VK Спаммер клавиатуры ----------
+# VK спаммер клавиатуры
 def vk_spammer_menu_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔑 Добавить аккаунт VK", callback_data="vk_add_account")],
@@ -143,8 +143,8 @@ def vk_accounts_keyboard(accounts):
 
 def vk_tasks_keyboard(tasks):
     buttons = []
-    status_emoji = {"pending":"⏳", "running":"▶️", "completed":"✅", "paused":"⏸", "cancelled":"❌"}
     for t in tasks:
+        status_emoji = {"pending":"⏳", "running":"▶️", "completed":"✅", "paused":"⏸", "cancelled":"❌"}
         emoji = status_emoji.get(t.status, "❓")
         buttons.append([InlineKeyboardButton(text=f"{emoji} Задача #{t.id} – {t.status}", callback_data=f"vk_task_{t.id}")])
     buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="vk_spammer_menu")])
