@@ -28,12 +28,9 @@ def catalog_keyboard(products, page=0):
     for p in page_products:
         buttons.append([InlineKeyboardButton(text=f"{p.name} — {p.price} {p.currency}", callback_data=f"view_product_{p.id}")])
     nav = []
-    if page > 0:
-        nav.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"catalog_page_{page-1}"))
-    if end < len(products):
-        nav.append(InlineKeyboardButton(text="Вперед ▶️", callback_data=f"catalog_page_{page+1}"))
-    if nav:
-        buttons.append(nav)
+    if page > 0: nav.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"catalog_page_{page-1}"))
+    if end < len(products): nav.append(InlineKeyboardButton(text="Вперед ▶️", callback_data=f"catalog_page_{page+1}"))
+    if nav: buttons.append(nav)
     buttons.append([InlineKeyboardButton(text="🔙 Главное меню", callback_data="main_menu")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -46,19 +43,15 @@ def sessions_keyboard(sessions, product_id, page=0):
     for s in page_sessions:
         buttons.append([InlineKeyboardButton(text=f"👥 {s.contacts_count} контактов", callback_data=f"buy_session_{s.id}")])
     nav = []
-    if page > 0:
-        nav.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"sessions_page_{product_id}_{page-1}"))
-    if end < len(sessions):
-        nav.append(InlineKeyboardButton(text="Вперед ▶️", callback_data=f"sessions_page_{product_id}_{page+1}"))
-    if nav:
-        buttons.append(nav)
+    if page > 0: nav.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"sessions_page_{product_id}_{page-1}"))
+    if end < len(sessions): nav.append(InlineKeyboardButton(text="Вперед ▶️", callback_data=f"sessions_page_{product_id}_{page+1}"))
+    if nav: buttons.append(nav)
     buttons.append([InlineKeyboardButton(text="🔙 Назад к товарам", callback_data="catalog")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def product_detail_keyboard(product_id, has_balance=False):
     buttons = []
-    if has_balance:
-        buttons.append([InlineKeyboardButton(text="💳 Купить с баланса", callback_data=f"buy_with_balance_{product_id}")])
+    if has_balance: buttons.append([InlineKeyboardButton(text="💳 Купить с баланса", callback_data=f"buy_with_balance_{product_id}")])
     buttons.append([InlineKeyboardButton(text="💸 Оплатить криптовалютой", callback_data=f"pay_{product_id}")])
     buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="catalog")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -103,19 +96,6 @@ def admin_balance_manage_keyboard():
         [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_menu")]
     ])
 
-def subscription_keyboard():
-    if not CHANNEL_ID:
-        return None
-    if CHANNEL_ID.startswith('@'):
-        url = f"https://t.me/{CHANNEL_ID[1:]}"
-    else:
-        url = f"https://t.me/c/{str(CHANNEL_ID)[4:]}"
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔗 Подписаться", url=url)],
-        [InlineKeyboardButton(text="✅ Проверить подписку", callback_data="verify_sub")]
-    ])
-
-# ---------- VK Спаммер клавиатуры ----------
 def vk_spammer_menu_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔑 Добавить аккаунт VK", callback_data="vk_add_account")],
@@ -126,18 +106,18 @@ def vk_spammer_menu_keyboard():
         [InlineKeyboardButton(text="🔙 Главное меню", callback_data="main_menu")]
     ])
 
-def vk_accounts_keyboard(accounts):
-    buttons = []
-    for a in accounts:
-        buttons.append([InlineKeyboardButton(text=f"👤 {a.vk_username} (ID {a.vk_user_id})", callback_data=f"vk_select_account_{a.id}")])
-    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="vk_spammer_menu")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
 def vk_templates_keyboard(templates):
     buttons = []
     for t in templates:
         buttons.append([InlineKeyboardButton(text=f"📝 {t.name}", callback_data=f"vk_use_template_{t.id}")])
     buttons.append([InlineKeyboardButton(text="➕ Новый шаблон", callback_data="vk_add_template")])
+    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="vk_spammer_menu")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def vk_accounts_keyboard(accounts):
+    buttons = []
+    for a in accounts:
+        buttons.append([InlineKeyboardButton(text=f"👤 {a.vk_username} (ID {a.vk_user_id})", callback_data=f"vk_select_account_{a.id}")])
     buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="vk_spammer_menu")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 

@@ -1,7 +1,7 @@
 import asyncio, json
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton
@@ -32,9 +32,11 @@ class WithdrawBalance(StatesGroup): amount = State(); wallet = State()
 class VKAddAccount(StatesGroup): token = State()
 class VKAddTemplate(StatesGroup): name = State(); text = State()
 class VKStartSpam(StatesGroup): account_id = State(); template_id = State(); recipients_type = State(); interval = State()
+class VKRecipientsList(StatesGroup): user_list = State()
 
 # ------------------ Helper ------------------
 def is_admin(user_id: int) -> bool: return user_id in ADMIN_IDS
+
 def add_transaction(db, user_id: int, amount: float, type: str, currency: str = "USDT", description: str = None):
     trans = models.Transaction(user_id=user_id, amount=amount, currency=currency, type=type, description=description)
     db.add(trans)
@@ -49,11 +51,9 @@ async def is_subscribed(user_id: int, bot: Bot) -> bool:
 
 async def check_vk_subscription(user_id: int) -> bool:
     with models.SessionLocal() as db:
-        account = db.query(models.VKAccount).filter_by(user_id=user_id, is_active=True).first()
-        if not account: return False
-        if account.subscription_expires and account.subscription_expires < datetime.utcnow():
-            account.is_active = False
-            db.commit()
+        user = db.query(models.User).filter_by(tg_id=user_id).first()
+        if not user: return False
+        if user.vk_spammer_subscription_expires and user.vk_spammer_subscription_expires < datetime.utcnow():
             return False
         return True
 
@@ -61,6 +61,10 @@ async def check_vk_subscription(user_id: int) -> bool:
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message, bot: Bot):
     user_id = message.from_user.id
+    # Сброс состояния, если пользователь завис в FSM
+    state = dp.fsm.get_context(bot, message.chat.id, user_id)
+    await state.clear()
+
     with models.SessionLocal() as db:
         user = db.query(models.User).filter_by(tg_id=user_id).first()
         if user and user.is_banned:
@@ -104,7 +108,10 @@ async def start_cmd(message: types.Message, bot: Bot):
                         user.referred_by = referrer_id; db.commit()
             except: pass
     await log_action(bot, user_id, "/start", "Запустил бота")
-    await message.answer("✨ <b>Добро пожаловать в магазин!</b> ✨\n\nПополняйте баланс, используйте промокоды и покупайте аккаунты.", parse_mode="HTML", reply_markup=kb.main_menu_keyboard())
+    await message.answer(
+        "✨ <b>Добро пожаловать в магазин!</b> ✨\n\nПополняйте баланс, используйте промокоды и покупайте аккаунты.",
+        parse_mode="HTML", reply_markup=kb.main_menu_keyboard()
+    )
 
 # ------------------ Главное меню ------------------
 @dp.callback_query(lambda c: c.data == "main_menu")
@@ -507,16 +514,18 @@ async def withdraw_wallet(message: types.Message, state: FSMContext, bot: Bot):
             await message.answer("❌ Ошибка: недостаточно средств.")
             await state.clear()
             return
-        user.referral_balance -= amount
-        add_transaction(db, user.id, -amount, "withdrawal", description=f"Вывод на кошелёк {wallet}")
+        # Создаём заявку на вывод
+        withdrawal = models.WithdrawalRequest(user_id=user.id, amount=amount, wallet=wallet, status="pending")
+        db.add(withdrawal)
         db.commit()
+        await log_action(bot, user_id, "withdraw_request", f"Сумма {amount} {CRYPTO_CURRENCY}, кошелёк {wallet}")
+        # Уведомляем админов
         for admin_id in ADMIN_IDS:
-            await bot.send_message(admin_id, f"💸 <b>Заявка на вывод</b>\n👤 {user_id}\n💰 Сумма: {amount} {CRYPTO_CURRENCY}\n💳 Кошелёк: {wallet}", parse_mode="HTML")
-        await message.answer(f"✅ Заявка на вывод {amount} {CRYPTO_CURRENCY} отправлена администраторам. Деньги будут переведены в ближайшее время.")
+            await bot.send_message(admin_id, f"💸 <b>Новая заявка на вывод</b>\n👤 {user_id}\n💰 Сумма: {amount} {CRYPTO_CURRENCY}\n💳 Кошелёк: {wallet}\n\nДля обработки используйте /admin", parse_mode="HTML")
+        await message.answer(f"✅ Заявка на вывод {amount} {CRYPTO_CURRENCY} создана. Администратор рассмотрит её в ближайшее время.")
     await state.clear()
 
 # ------------------ Чат поддержки ------------------
-support_messages = {}
 @dp.callback_query(lambda c: c.data == "support")
 async def support_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text("💬 Напишите ваше сообщение администратору.\n\nЧтобы отменить, нажмите /cancel")
@@ -977,6 +986,70 @@ async def manage_balance_user_id(message: types.Message, state: FSMContext, bot:
         await message.answer("❌ Ошибка. Введите ID и сумму через пробел, например: 123456789 10.5")
         await state.clear()
 
+# ------------------ Заявки на вывод (админ) ------------------
+@dp.callback_query(lambda c: c.data == "admin_withdrawals")
+async def admin_withdrawals_menu(callback: types.CallbackQuery, bot: Bot):
+    if not is_admin(callback.from_user.id): return
+    with models.SessionLocal() as db:
+        withdrawals = db.query(models.WithdrawalRequest).filter_by(status="pending").all()
+        if not withdrawals:
+            await callback.message.edit_text("📭 Нет активных заявок на вывод.", reply_markup=kb.admin_menu_keyboard())
+            return
+        text = "💸 <b>Заявки на вывод</b>\n\n"
+        for w in withdrawals:
+            user = db.query(models.User).filter_by(id=w.user_id).first()
+            text += f"👤 {user.tg_id} (ID {user.id})\n💰 Сумма: {w.amount} {CRYPTO_CURRENCY}\n💳 Кошелёк: {w.wallet}\n📅 {w.created_at.strftime('%d.%m.%Y %H:%M')}\n"
+            text += f"➡️ /approve_{w.id} - одобрить\n❌ /decline_{w.id} - отклонить\n\n"
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb.admin_menu_keyboard())
+    await callback.answer()
+
+@dp.message(Command(commands=["approve"], prefix="/"))
+async def approve_withdrawal(message: types.Message, bot: Bot):
+    if not is_admin(message.from_user.id): return
+    try:
+        withdrawal_id = int(message.text.split('_')[1])
+        with models.SessionLocal() as db:
+            withdrawal = db.query(models.WithdrawalRequest).filter_by(id=withdrawal_id).first()
+            if not withdrawal:
+                await message.answer("❌ Заявка не найдена.")
+                return
+            if withdrawal.status != "pending":
+                await message.answer("❌ Заявка уже обработана.")
+                return
+            user = db.query(models.User).filter_by(id=withdrawal.user_id).first()
+            if user.referral_balance < withdrawal.amount:
+                await message.answer("❌ Недостаточно средств на бонусном балансе пользователя.")
+                return
+            user.referral_balance -= withdrawal.amount
+            withdrawal.status = "approved"
+            db.commit()
+            add_transaction(db, user.id, -withdrawal.amount, "withdrawal", description=f"Вывод одобрен администратором")
+            await message.answer(f"✅ Вывод {withdrawal.amount} {CRYPTO_CURRENCY} пользователю {user.tg_id} одобрен.")
+            await bot.send_message(user.tg_id, f"✅ Ваша заявка на вывод {withdrawal.amount} {CRYPTO_CURRENCY} одобрена и средства списаны с бонусного баланса.")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+
+@dp.message(Command(commands=["decline"], prefix="/"))
+async def decline_withdrawal(message: types.Message, bot: Bot):
+    if not is_admin(message.from_user.id): return
+    try:
+        withdrawal_id = int(message.text.split('_')[1])
+        with models.SessionLocal() as db:
+            withdrawal = db.query(models.WithdrawalRequest).filter_by(id=withdrawal_id).first()
+            if not withdrawal:
+                await message.answer("❌ Заявка не найдена.")
+                return
+            if withdrawal.status != "pending":
+                await message.answer("❌ Заявка уже обработана.")
+                return
+            withdrawal.status = "declined"
+            db.commit()
+            user = db.query(models.User).filter_by(id=withdrawal.user_id).first()
+            await message.answer(f"❌ Вывод {withdrawal.amount} {CRYPTO_CURRENCY} пользователю {user.tg_id} отклонён.")
+            await bot.send_message(user.tg_id, f"❌ Ваша заявка на вывод {withdrawal.amount} {CRYPTO_CURRENCY} отклонена. Свяжитесь с администратором.")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+
 # ------------------ Бан/разбан ------------------
 @dp.callback_query(lambda c: c.data == "admin_ban")
 async def admin_ban_start(callback: types.CallbackQuery, state: FSMContext):
@@ -1163,17 +1236,10 @@ async def buy_spammer(message: types.Message, bot: Bot):
             return
         if user.balance >= SPAMMER_SUBSCRIPTION_PRICE:
             user.balance -= SPAMMER_SUBSCRIPTION_PRICE
-            expires = datetime.utcnow() + timedelta(days=30)
-            account = db.query(models.VKAccount).filter_by(user_id=user.id).first()
-            if account:
-                account.subscription_expires = expires
-                account.is_active = True
-            else:
-                account = models.VKAccount(user_id=user.id, access_token="", vk_user_id=0, subscription_expires=expires)
-                db.add(account)
+            user.vk_spammer_subscription_expires = datetime.utcnow() + timedelta(days=30)
             db.commit()
             add_transaction(db, user.id, -SPAMMER_SUBSCRIPTION_PRICE, "purchase", description="Подписка VK Спаммер")
-            await message.answer(f"✅ Подписка на VK Спаммер активирована до {expires.strftime('%d.%m.%Y')}.\nТеперь добавьте аккаунт VK через меню.")
+            await message.answer(f"✅ Подписка на VK Спаммер активирована до {user.vk_spammer_subscription_expires.strftime('%d.%m.%Y')}.\nТеперь добавьте аккаунт VK через меню.")
         else:
             try:
                 inv_id, pay_url = await crypto_api.create_invoice(SPAMMER_SUBSCRIPTION_PRICE, CRYPTO_CURRENCY)
@@ -1221,7 +1287,7 @@ async def vk_add_account_token(message: types.Message, state: FSMContext, bot: B
             friends_count=friends,
             groups_count=groups,
             followers_count=followers,
-            subscription_expires=datetime.utcnow() + timedelta(days=30)
+            subscription_expires=datetime.utcnow() + timedelta(days=30)  # продлеваем подписку на месяц
         )
         db.add(account); db.commit()
         await log_action(bot, user_id, "vk_add_account", f"Добавлен аккаунт VK ID {vk_user['id']}")
@@ -1321,8 +1387,22 @@ async def vk_spam_recipients_type(message: types.Message, state: FSMContext, bot
         await message.answer("❌ Введите /friends, /groups, /followers или /list")
         return
     await state.update_data(recipients_type=rt)
-    await message.answer("⏱ Введите интервал между сообщениями в секундах (например, 30):")
-    await state.set_state(VKStartSpam.interval)
+    if rt == "/list":
+        await message.answer("📝 Введите список ID получателей через запятую (например, 123456,789012,345678):")
+        await state.set_state(VKRecipientsList.user_list)
+    else:
+        await message.answer("⏱ Введите интервал между сообщениями в секундах (например, 30):")
+        await state.set_state(VKStartSpam.interval)
+
+@dp.message(VKRecipientsList.user_list)
+async def vk_spam_list(message: types.Message, state: FSMContext):
+    try:
+        user_list = [int(x.strip()) for x in message.text.split(',')]
+        await state.update_data(user_list=user_list)
+        await message.answer("⏱ Введите интервал между сообщениями в секундах (например, 30):")
+        await state.set_state(VKStartSpam.interval)
+    except:
+        await message.answer("❌ Неверный формат списка. Введите ID через запятую.")
 
 @dp.message(VKStartSpam.interval)
 async def vk_spam_interval(message: types.Message, state: FSMContext, bot: Bot):
@@ -1335,6 +1415,7 @@ async def vk_spam_interval(message: types.Message, state: FSMContext, bot: Bot):
         account_id = data['account_id']
         template_id = data['template_id']
         recipients_type = data['recipients_type']
+        user_list = data.get('user_list', [])
         user_id = message.from_user.id
         with models.SessionLocal() as db:
             user = db.query(models.User).filter_by(tg_id=user_id).first()
@@ -1348,22 +1429,23 @@ async def vk_spam_interval(message: types.Message, state: FSMContext, bot: Bot):
                 await message.answer("❌ Шаблон не найден")
                 await state.clear()
                 return
+            # Получаем список получателей
             client = VKClient(account.access_token)
             if recipients_type == "/friends":
                 recipients = await client.get_friends_ids()
                 recipients_str = "friends"
-            elif recipients_type == "/groups":
-                await message.answer("❌ Рассылка по группам временно недоступна.")
+            elif recipients_type == "/list":
+                recipients = user_list
+                recipients_str = ",".join(str(x) for x in user_list)
+            else:
+                await message.answer(f"❌ Тип {recipients_type} временно недоступен.")
                 await state.clear()
                 return
-            elif recipients_type == "/followers":
-                await message.answer("❌ Рассылка по подписчикам временно недоступна.")
+            if not recipients:
+                await message.answer("❌ Нет получателей для рассылки.")
                 await state.clear()
                 return
-            else:  # /list
-                await message.answer("Введите список ID получателей через запятую (например, 123,456,789):")
-                await state.set_state("vk_spam_list")
-                return
+            # Создаём задачу
             task = models.VKSpamTask(
                 user_id=user.id,
                 vk_account_id=account_id,
