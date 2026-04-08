@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
+from aiogram.filters import Command, StateFilter
 from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy import func
 import keyboards as kb
