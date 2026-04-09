@@ -25,6 +25,10 @@ class User(Base):
     invoices = relationship("Invoice", back_populates="user")
     logs = relationship("Log", back_populates="user")
     transactions = relationship("Transaction", back_populates="user")
+    vk_accounts = relationship("VKAccount", back_populates="user")
+    vk_spammer_subscription_until = Column(DateTime, nullable=True)
+    vk_templates = relationship("VKMessageTemplate", back_populates="user")
+    vk_spam_tasks = relationship("VKSpamTask", back_populates="user")
 
 class Product(Base):
     __tablename__ = 'products'
@@ -106,23 +110,77 @@ class PromoCodeActivation(Base):
     user = relationship("User")
     promo = relationship("PromoCode", back_populates="activations")
 
-class Transaction(Base):
-    __tablename__ = 'transactions'
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
-    amount = Column(Float, nullable=False)
-    currency = Column(String, default="USDT")
-    type = Column(String, nullable=False)
-    description = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    user = relationship("User", back_populates="transactions")
-
 class Backup(Base):
     __tablename__ = 'backups'
     id = Column(Integer, primary_key=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     data = Column(Text, nullable=False)
     note = Column(String, nullable=True)
+
+class Transaction(Base):
+    __tablename__ = 'transactions'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    amount = Column(Float, nullable=False)
+    currency = Column(String, default="USDT")
+    type = Column(String, nullable=False)  # deposit, purchase, bonus, withdrawal
+    description = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    user = relationship("User", back_populates="transactions")
+
+class VKAccount(Base):
+    __tablename__ = 'vk_accounts'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    access_token = Column(String, nullable=False)
+    vk_user_id = Column(Integer, nullable=False)
+    vk_username = Column(String, nullable=True)
+    friends_count = Column(Integer, default=0)
+    groups_count = Column(Integer, default=0)
+    followers_count = Column(Integer, default=0)
+    subscription_expires = Column(DateTime, nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    user = relationship("User", back_populates="vk_accounts")
+    spam_tasks = relationship("VKSpamTask", back_populates="vk_account")
+
+class VKMessageTemplate(Base):
+    __tablename__ = 'vk_message_templates'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    name = Column(String, nullable=False)
+    text = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    user = relationship("User", back_populates="vk_templates")
+    tasks = relationship("VKSpamTask", back_populates="template")
+
+class VKSpamTask(Base):
+    __tablename__ = 'vk_spam_tasks'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    vk_account_id = Column(Integer, ForeignKey('vk_accounts.id'), nullable=False)
+    template_id = Column(Integer, ForeignKey('vk_message_templates.id'), nullable=False)
+    recipients = Column(Text, nullable=False)  # 'friends', 'groups', 'followers' или список ID через запятую
+    interval_seconds = Column(Integer, default=30)
+    total_sent = Column(Integer, default=0)
+    total_failed = Column(Integer, default=0)
+    status = Column(String, default='pending')
+    created_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    user = relationship("User", back_populates="vk_spam_tasks")
+    vk_account = relationship("VKAccount", back_populates="spam_tasks")
+    template = relationship("VKMessageTemplate", back_populates="tasks")
+
+class VKSpamLog(Base):
+    __tablename__ = 'vk_spam_logs'
+    id = Column(Integer, primary_key=True)
+    task_id = Column(Integer, ForeignKey('vk_spam_tasks.id'), nullable=False)
+    recipient_id = Column(Integer, nullable=False)
+    status = Column(String, nullable=False)  # sent, failed
+    error = Column(String, nullable=True)
+    sent_at = Column(DateTime, default=datetime.utcnow)
+    task = relationship("VKSpamTask")
 
 def init_db():
     Base.metadata.create_all(engine)
