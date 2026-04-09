@@ -523,7 +523,6 @@ async def support_send(message: types.Message, state: FSMContext, bot: Bot):
         await message.answer("❌ Отменено.")
         await state.clear()
         return
-    # Экранируем текст для HTML
     safe_text = html.escape(text)
     for admin_id in ADMIN_IDS:
         try:
