@@ -9,7 +9,6 @@ def main_menu_keyboard():
         [InlineKeyboardButton(text="👥 Мои рефералы", callback_data="my_referrals")],
         [InlineKeyboardButton(text="📜 История баланса", callback_data="balance_history")],
         [InlineKeyboardButton(text="💬 Поддержка", callback_data="support")],
-        [InlineKeyboardButton(text="📨 VK Спаммер", callback_data="vk_spammer_menu")],
     ])
 
 def balance_keyboard():
@@ -114,37 +113,3 @@ def subscription_keyboard():
         [InlineKeyboardButton(text="🔗 Подписаться", url=url)],
         [InlineKeyboardButton(text="✅ Проверить подписку", callback_data="verify_sub")]
     ])
-
-def vk_spammer_menu_keyboard():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔑 Добавить аккаунт VK", callback_data="vk_add_account")],
-        [InlineKeyboardButton(text="📊 Мои аккаунты", callback_data="vk_my_accounts")],
-        [InlineKeyboardButton(text="📝 Шаблоны сообщений", callback_data="vk_templates")],
-        [InlineKeyboardButton(text="🚀 Запустить рассылку", callback_data="vk_start_spam")],
-        [InlineKeyboardButton(text="⏸ Мои задачи", callback_data="vk_my_tasks")],
-        [InlineKeyboardButton(text="🔙 Главное меню", callback_data="main_menu")]
-    ])
-
-def vk_templates_keyboard(templates):
-    buttons = []
-    for t in templates:
-        buttons.append([InlineKeyboardButton(text=f"📝 {t.name}", callback_data=f"vk_use_template_{t.id}")])
-    buttons.append([InlineKeyboardButton(text="➕ Новый шаблон", callback_data="vk_add_template")])
-    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="vk_spammer_menu")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-def vk_accounts_keyboard(accounts):
-    buttons = []
-    for a in accounts:
-        buttons.append([InlineKeyboardButton(text=f"👤 {a.vk_username} (ID {a.vk_user_id})", callback_data=f"vk_select_account_{a.id}")])
-    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="vk_spammer_menu")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-def vk_tasks_keyboard(tasks):
-    buttons = []
-    for t in tasks:
-        status_emoji = {"pending":"⏳", "running":"▶️", "completed":"✅", "paused":"⏸", "cancelled":"❌"}
-        emoji = status_emoji.get(t.status, "❓")
-        buttons.append([InlineKeyboardButton(text=f"{emoji} Задача #{t.id} – {t.status}", callback_data=f"vk_task_{t.id}")])
-    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="vk_spammer_menu")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
