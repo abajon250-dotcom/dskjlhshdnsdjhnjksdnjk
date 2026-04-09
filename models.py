@@ -29,8 +29,7 @@ class User(Base):
     vk_accounts = relationship("VKAccount", back_populates="user")
     vk_templates = relationship("VKMessageTemplate", back_populates="user")
     vk_spam_tasks = relationship("VKSpamTask", back_populates="user")
-    withdrawal_requests = relationship("WithdrawalRequest", back_populates="user")
-    tickets = relationship("Ticket", back_populates="user")
+    tickets = relationship("Ticket", back_populates="user")  # связь для тикетов
 
 class Product(Base):
     __tablename__ = 'products'
@@ -125,21 +124,10 @@ class Transaction(Base):
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     amount = Column(Float, nullable=False)
     currency = Column(String, default="USDT")
-    type = Column(String, nullable=False)  # deposit, purchase, bonus, withdrawal
+    type = Column(String, nullable=False)  # deposit, purchase, bonus, withdrawal, refund
     description = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     user = relationship("User", back_populates="transactions")
-
-class WithdrawalRequest(Base):
-    __tablename__ = 'withdrawal_requests'
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
-    amount = Column(Float, nullable=False)
-    wallet = Column(String, nullable=False)
-    status = Column(String, default='pending')  # pending, approved, rejected
-    created_at = Column(DateTime, default=datetime.utcnow)
-    processed_at = Column(DateTime, nullable=True)
-    user = relationship("User", back_populates="withdrawal_requests")
 
 class VKAccount(Base):
     __tablename__ = 'vk_accounts'
@@ -196,15 +184,28 @@ class VKSpamLog(Base):
     sent_at = Column(DateTime, default=datetime.utcnow)
     task = relationship("VKSpamTask", back_populates="logs")
 
-    class Ticket(Base):
-        __tablename__ = 'tickets'
-        id = Column(Integer, primary_key=True)
-        user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
-        text = Column(Text, nullable=False)
-        reply = Column(Text, nullable=True)
-        status = Column(String, default='open')  # open, closed
-        created_at = Column(DateTime, default=datetime.utcnow)
-        user = relationship("User", back_populates="tickets")
+# Таблица для заявок на вывод
+class WithdrawalRequest(Base):
+    __tablename__ = 'withdrawal_requests'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    amount = Column(Float, nullable=False)
+    wallet = Column(String, nullable=False)
+    status = Column(String, default='pending')  # pending, approved, rejected
+    created_at = Column(DateTime, default=datetime.utcnow)
+    processed_at = Column(DateTime, nullable=True)
+    user = relationship("User")
+
+# Таблица для тикетов поддержки
+class Ticket(Base):
+    __tablename__ = 'tickets'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    text = Column(Text, nullable=False)
+    reply = Column(Text, nullable=True)
+    status = Column(String, default='open')  # open, closed
+    created_at = Column(DateTime, default=datetime.utcnow)
+    user = relationship("User", back_populates="tickets")
 
 def init_db():
     Base.metadata.create_all(engine)

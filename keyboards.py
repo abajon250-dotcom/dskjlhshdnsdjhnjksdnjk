@@ -80,6 +80,7 @@ def admin_menu_keyboard():
         [InlineKeyboardButton(text="📎 Добавить tdata (ZIP)", callback_data="admin_add_tdata")],
         [InlineKeyboardButton(text="📝 Добавить текст (логин:пароль)", callback_data="admin_add_text")],
         [InlineKeyboardButton(text="🎟 Промокоды", callback_data="admin_promocodes")],
+        [InlineKeyboardButton(text="📩 Обращения", callback_data="admin_tickets")],
         [InlineKeyboardButton(text="💰 Управление балансами", callback_data="admin_balance_manage")],
         [InlineKeyboardButton(text="💸 Заявки на вывод", callback_data="admin_withdrawals")],
         [InlineKeyboardButton(text="🔨 Забанить/разбанить", callback_data="admin_ban")],
