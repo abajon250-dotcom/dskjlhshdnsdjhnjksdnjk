@@ -79,6 +79,7 @@ def admin_menu_keyboard():
         [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast")],
         [InlineKeyboardButton(text="💾 Экспорт данных", callback_data="admin_export_data")],
         [InlineKeyboardButton(text="📥 Импорт данных", callback_data="admin_import_data")],
+        [InlineKeyboardButton(text="🎟 Выдать подписку VK", callback_data="admin_give_vk_subscription")],
         [InlineKeyboardButton(text="🔙 Главное меню", callback_data="main_menu")]
     ])
 
@@ -138,3 +139,11 @@ def vk_tasks_keyboard(tasks):
         buttons.append([InlineKeyboardButton(text=f"{emoji} Задача #{t.id} – {t.status}", callback_data=f"vk_task_{t.id}")])
     buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="vk_spammer_menu")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def buy_spammer_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="1 месяц - 10 USDT", callback_data="buy_spammer_1")],
+        [InlineKeyboardButton(text="3 месяца - 25 USDT", callback_data="buy_spammer_3")],
+        [InlineKeyboardButton(text="6 месяцев - 45 USDT", callback_data="buy_spammer_6")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")]
+    ])

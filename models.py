@@ -29,6 +29,7 @@ class User(Base):
     vk_spammer_subscription_until = Column(DateTime, nullable=True)
     vk_templates = relationship("VKMessageTemplate", back_populates="user")
     vk_spam_tasks = relationship("VKSpamTask", back_populates="user")
+    vk_spammer_subscription_until = Column(DateTime, nullable=True)
 
 class Product(Base):
     __tablename__ = 'products'
