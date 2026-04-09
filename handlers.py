@@ -63,7 +63,9 @@ async def check_vk_subscription(user_id: int) -> bool:
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message, bot: Bot):
     user_id = message.from_user.id
-    await log_action(bot, user_id, "/start", f"Команда /start от {user_id}")
+    username = message.from_user.username
+    full_name = message.from_user.full_name
+    await log_action(bot, user_id, "/start", "Запустил бота", username=username, full_name=full_name)
     with models.SessionLocal() as db:
         user = db.query(models.User).filter_by(tg_id=user_id).first()
         if user and user.is_banned:
@@ -111,7 +113,10 @@ async def start_cmd(message: types.Message, bot: Bot):
 # ------------------ Главное меню ------------------
 @dp.callback_query(lambda c: c.data == "main_menu")
 async def main_menu_callback(callback: types.CallbackQuery, bot: Bot):
-    await log_action(bot, callback.from_user.id, "main_menu", "Нажал 'Главное меню'")
+    user_id = callback.from_user.id
+    username = callback.from_user.username
+    full_name = callback.from_user.full_name
+    await log_action(bot, user_id, "main_menu", "Нажал 'Главное меню'", username=username, full_name=full_name)
     await callback.message.edit_text("✨ <b>Главное меню</b> ✨\n\nВыберите действие:", parse_mode="HTML", reply_markup=kb.main_menu_keyboard())
     await callback.answer()
 
@@ -553,7 +558,10 @@ async def my_referrals(callback: types.CallbackQuery, bot: Bot):
 # ------------------ Поддержка (с экранированием HTML) ------------------
 @dp.callback_query(lambda c: c.data == "support")
 async def support_start(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
-    await log_action(bot, callback.from_user.id, "support", "Открыл окно поддержки")
+    user_id = callback.from_user.id
+    username = callback.from_user.username
+    full_name = callback.from_user.full_name
+    await log_action(bot, user_id, "support", "Открыл окно поддержки", username=username, full_name=full_name)
     await callback.message.edit_text("💬 Напишите ваше сообщение администратору.\n\nЧтобы отменить, нажмите /cancel")
     await state.set_state("support_waiting")
     await callback.answer()
@@ -561,16 +569,18 @@ async def support_start(callback: types.CallbackQuery, state: FSMContext, bot: B
 @dp.message(StateFilter("support_waiting"))
 async def support_send(message: types.Message, state: FSMContext, bot: Bot):
     user_id = message.from_user.id
+    username = message.from_user.username
+    full_name = message.from_user.full_name
     text = message.text
     if text == "/cancel":
         await message.answer("❌ Отменено.")
         await state.clear()
         return
-    await log_action(bot, user_id, "support_send", f"Сообщение: {text[:100]}")
+    await log_action(bot, user_id, "support_send", f"Сообщение: {text[:100]}", username=username, full_name=full_name)
     safe_text = html.escape(text)
     for admin_id in ADMIN_IDS:
         try:
-            await bot.send_message(admin_id, f"📩 <b>Новое сообщение от пользователя</b>\n👤 {user_id}\n💬 {safe_text}\n\nЧтобы ответить, используйте:\n/reply_{user_id} <текст>", parse_mode="HTML")
+            await bot.send_message(admin_id, f"📩 <b>Новое сообщение от пользователя</b>\n👤 {full_name} (@{username})\n💬 {safe_text}\n\nЧтобы ответить, используйте:\n/reply_{user_id} <текст>", parse_mode="HTML")
         except Exception as e:
             print(f"Ошибка отправки админу {admin_id}: {e}")
     await message.answer("✅ Сообщение отправлено администратору. Ожидайте ответа.")
@@ -594,7 +604,6 @@ async def admin_reply(message: types.Message, bot: Bot):
         await message.answer("✅ Ответ отправлен.")
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
-
 # ------------------ Админ-панель ------------------
 @dp.message(Command("admin"))
 async def admin_cmd(message: types.Message, bot: Bot):
