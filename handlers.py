@@ -516,7 +516,8 @@ async def withdraw_wallet(message: types.Message, state: FSMContext, bot: Bot):
 # ------------------ Чат поддержки ------------------
 support_messages = {}
 @dp.callback_query(lambda c: c.data == "support")
-async def support_start(callback: types.CallbackQuery, state: FSMContext):
+async def support_start(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
+    await log_action(bot, callback.from_user.id, "support", "Открыл окно поддержки")
     await callback.message.edit_text("💬 Напишите ваше сообщение администратору.\n\nЧтобы отменить, нажмите /cancel")
     await state.set_state("support_waiting")
     await callback.answer()
