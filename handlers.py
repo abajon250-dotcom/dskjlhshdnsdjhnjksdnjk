@@ -3,6 +3,7 @@ import json
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton
@@ -541,8 +542,11 @@ async def support_start(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state("support_waiting")
     await callback.answer()
 
-@dp.message(lambda message: message.text, StateFilter("support_waiting"))
+@dp.message(lambda message: message.text)
 async def support_send(message: types.Message, state: FSMContext, bot: Bot):
+    current_state = await state.get_state()
+    if current_state != "support_waiting":
+        return
     user_id = message.from_user.id
     text = message.text
     if text == "/cancel":
