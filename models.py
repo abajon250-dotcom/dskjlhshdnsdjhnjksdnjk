@@ -21,15 +21,15 @@ class User(Base):
     total_referral_earnings = Column(Float, default=0.0)
     referral_count = Column(Integer, default=0)
     referred_by = Column(Integer, ForeignKey('users.tg_id'), nullable=True)
+    vk_spammer_subscription_until = Column(DateTime, nullable=True)
     purchases = relationship("Purchase", back_populates="user")
     invoices = relationship("Invoice", back_populates="user")
     logs = relationship("Log", back_populates="user")
     transactions = relationship("Transaction", back_populates="user")
     vk_accounts = relationship("VKAccount", back_populates="user")
-    vk_spammer_subscription_until = Column(DateTime, nullable=True)
     vk_templates = relationship("VKMessageTemplate", back_populates="user")
     vk_spam_tasks = relationship("VKSpamTask", back_populates="user")
-    vk_spammer_subscription_until = Column(DateTime, nullable=True)
+    withdrawal_requests = relationship("WithdrawalRequest", back_populates="user")
 
 class Product(Base):
     __tablename__ = 'products'
@@ -129,6 +129,17 @@ class Transaction(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     user = relationship("User", back_populates="transactions")
 
+class WithdrawalRequest(Base):
+    __tablename__ = 'withdrawal_requests'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    amount = Column(Float, nullable=False)
+    wallet = Column(String, nullable=False)
+    status = Column(String, default='pending')  # pending, approved, rejected
+    created_at = Column(DateTime, default=datetime.utcnow)
+    processed_at = Column(DateTime, nullable=True)
+    user = relationship("User", back_populates="withdrawal_requests")
+
 class VKAccount(Base):
     __tablename__ = 'vk_accounts'
     id = Column(Integer, primary_key=True)
@@ -161,7 +172,7 @@ class VKSpamTask(Base):
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     vk_account_id = Column(Integer, ForeignKey('vk_accounts.id'), nullable=False)
     template_id = Column(Integer, ForeignKey('vk_message_templates.id'), nullable=False)
-    recipients = Column(Text, nullable=False)  # 'friends', 'groups', 'followers' или список ID через запятую
+    recipients = Column(Text, nullable=False)
     interval_seconds = Column(Integer, default=30)
     total_sent = Column(Integer, default=0)
     total_failed = Column(Integer, default=0)
@@ -172,6 +183,7 @@ class VKSpamTask(Base):
     user = relationship("User", back_populates="vk_spam_tasks")
     vk_account = relationship("VKAccount", back_populates="spam_tasks")
     template = relationship("VKMessageTemplate", back_populates="tasks")
+    logs = relationship("VKSpamLog", back_populates="task")
 
 class VKSpamLog(Base):
     __tablename__ = 'vk_spam_logs'
@@ -181,18 +193,7 @@ class VKSpamLog(Base):
     status = Column(String, nullable=False)  # sent, failed
     error = Column(String, nullable=True)
     sent_at = Column(DateTime, default=datetime.utcnow)
-    task = relationship("VKSpamTask")
-
-class WithdrawalRequest(Base):
-    __tablename__ = 'withdrawal_requests'
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
-    amount = Column(Float, nullable=False)
-    wallet = Column(String, nullable=False)
-    status = Column(String, default='pending')  # pending, approved, rejected
-    created_at = Column(DateTime, default=datetime.utcnow)
-    processed_at = Column(DateTime, nullable=True)
-    user = relationship("User")
+    task = relationship("VKSpamTask", back_populates="logs")
 
 def init_db():
     Base.metadata.create_all(engine)

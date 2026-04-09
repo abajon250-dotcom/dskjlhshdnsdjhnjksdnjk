@@ -65,7 +65,7 @@ async def start_cmd(message: types.Message, bot: Bot):
     user_id = message.from_user.id
     username = message.from_user.username
     full_name = message.from_user.full_name
-    await log_action(bot, user_id, "/start", f"Команда /start от {user_id}", username=username, full_name=full_name)
+    await log_action(bot, user_id, "/start", "Запустил бота", username=username, full_name=full_name)
     with models.SessionLocal() as db:
         user = db.query(models.User).filter_by(tg_id=user_id).first()
         if user and user.is_banned:
@@ -221,7 +221,7 @@ async def balance_history(callback: types.CallbackQuery, bot: Bot):
         await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb.main_menu_keyboard())
     await callback.answer()
 
-# ------------------ Вывод средств (из обычного баланса) с созданием заявки ------------------
+# ------------------ Вывод средств (из обычного баланса с заявкой) ------------------
 @dp.callback_query(lambda c: c.data == "withdraw_balance")
 async def withdraw_start(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
     await log_action(bot, callback.from_user.id, "withdraw_balance", "Начало вывода средств", username=callback.from_user.username, full_name=callback.from_user.full_name)
@@ -282,15 +282,20 @@ async def withdraw_wallet(message: types.Message, state: FSMContext, bot: Bot):
         # Создаём заявку на вывод
         withdrawal = models.WithdrawalRequest(user_id=user.id, amount=amount, wallet=wallet, status='pending')
         db.add(withdrawal)
-        # Не списываем баланс, только создаём заявку
-        # Баланс будет списан при одобрении
         db.commit()
-        # Уведомляем админов
+        # Отправляем админам кнопки для обработки
         for admin_id in ADMIN_IDS:
-            await bot.send_message(admin_id, f"💸 <b>Новая заявка на вывод</b>\n👤 {user_id}\n💰 Сумма: {amount} {CRYPTO_CURRENCY}\n💳 Кошелёк: {wallet}\n\nСтатус: ожидает", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="✅ Одобрить", callback_data=f"approve_withdrawal_{withdrawal.id}"),
-                 InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject_withdrawal_{withdrawal.id}")]
-            ]))
+            await bot.send_message(admin_id,
+                f"💸 <b>Новая заявка на вывод</b>\n"
+                f"👤 Пользователь: {user.tg_id}\n"
+                f"💰 Сумма: {amount} {CRYPTO_CURRENCY}\n"
+                f"💳 Кошелёк: {wallet}\n"
+                f"🆔 Заявка #{withdrawal.id}",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="✅ Одобрить", callback_data=f"approve_withdrawal_{withdrawal.id}"),
+                     InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject_withdrawal_{withdrawal.id}")]
+                ])
+            )
         await message.answer(f"✅ Заявка на вывод {amount} {CRYPTO_CURRENCY} отправлена администраторам. Деньги будут переведены после проверки.")
     await state.clear()
 
@@ -306,21 +311,12 @@ async def approve_withdrawal(callback: types.CallbackQuery, bot: Bot):
         if not withdrawal or withdrawal.status != 'pending':
             await callback.message.edit_text("❌ Заявка уже обработана или не найдена.")
             return
-        # Списание баланса
         user = withdrawal.user
-        if user.balance < withdrawal.amount:
-            await callback.message.edit_text("❌ Недостаточно средств на балансе пользователя.")
-            return
-        user.balance -= withdrawal.amount
         withdrawal.status = 'approved'
         withdrawal.processed_at = datetime.utcnow()
-        add_transaction(db, user.id, -withdrawal.amount, "withdrawal", description=f"Вывод на кошелёк {withdrawal.wallet} (одобрено)")
         db.commit()
-        await callback.message.edit_text(f"✅ Заявка #{withdrawal_id} одобрена. Средства списаны.")
-        try:
-            await bot.send_message(user.tg_id, f"✅ Ваша заявка на вывод {withdrawal.amount} {CRYPTO_CURRENCY} одобрена. Деньги отправлены на кошелёк {withdrawal.wallet}.")
-        except:
-            pass
+        await callback.message.edit_text(f"✅ Заявка #{withdrawal_id} одобрена.")
+        await bot.send_message(user.tg_id, f"✅ Ваша заявка на вывод {withdrawal.amount} {CRYPTO_CURRENCY} одобрена. Деньги будут отправлены в ближайшее время.")
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data.startswith("reject_withdrawal_"))
@@ -334,404 +330,344 @@ async def reject_withdrawal(callback: types.CallbackQuery, bot: Bot):
         if not withdrawal or withdrawal.status != 'pending':
             await callback.message.edit_text("❌ Заявка уже обработана или не найдена.")
             return
+        user = withdrawal.user
+        # Возвращаем средства
+        user.balance += withdrawal.amount
+        add_transaction(db, user.id, withdrawal.amount, "refund", description=f"Возврат отклонённой заявки #{withdrawal_id}")
         withdrawal.status = 'rejected'
         withdrawal.processed_at = datetime.utcnow()
         db.commit()
-        await callback.message.edit_text(f"❌ Заявка #{withdrawal_id} отклонена.")
-        try:
-            await bot.send_message(withdrawal.user.tg_id, f"❌ Ваша заявка на вывод {withdrawal.amount} {CRYPTO_CURRENCY} отклонена. Средства не списаны.")
-        except:
-            pass
+        await callback.message.edit_text(f"❌ Заявка #{withdrawal_id} отклонена. Средства возвращены на баланс.")
+        await bot.send_message(user.tg_id, f"❌ Ваша заявка на вывод {withdrawal.amount} {CRYPTO_CURRENCY} отклонена. Средства возвращены на баланс.")
     await callback.answer()
 
-    # ------------------ Каталог и пагинация ------------------
-    @dp.callback_query(lambda c: c.data == "catalog")
-    async def show_catalog(callback: types.CallbackQuery, bot: Bot):
-        await log_action(bot, callback.from_user.id, "catalog", "Открыл каталог", username=callback.from_user.username,
-                         full_name=callback.from_user.full_name)
-        with models.SessionLocal() as db:
-            products = db.query(models.Product).filter(
-                models.Product.is_active == True,
-                models.Product.sessions.any(models.Session.is_sold == False)
-            ).order_by(models.Product.id).all()
-            if not products:
-                await callback.message.edit_text("📭 Товаров пока нет")
-                return
-            await callback.message.edit_text("📂 <b>Каталог</b> (страница 1)", parse_mode="HTML",
-                                             reply_markup=kb.catalog_keyboard(products, page=0))
-        await callback.answer()
-
-    @dp.callback_query(lambda c: c.data.startswith("catalog_page_"))
-    async def catalog_page(callback: types.CallbackQuery, bot: Bot):
-        page = int(callback.data.split("_")[-1])
-        await log_action(bot, callback.from_user.id, "catalog_page", f"Страница {page + 1}",
-                         username=callback.from_user.username, full_name=callback.from_user.full_name)
-        with models.SessionLocal() as db:
-            products = db.query(models.Product).filter(
-                models.Product.is_active == True,
-                models.Product.sessions.any(models.Session.is_sold == False)
-            ).order_by(models.Product.id).all()
-            if not products:
-                await callback.message.edit_text("📭 Товаров нет")
-                return
-            await callback.message.edit_text(f"📂 <b>Каталог</b> (страница {page + 1})", parse_mode="HTML",
-                                             reply_markup=kb.catalog_keyboard(products, page=page))
-        await callback.answer()
-
-    @dp.callback_query(lambda c: c.data.startswith("view_product_"))
-    async def view_product(callback: types.CallbackQuery, bot: Bot):
-        product_id = int(callback.data.split("_")[-1])
-        await log_action(bot, callback.from_user.id, "view_product", f"Товар ID {product_id}",
-                         username=callback.from_user.username, full_name=callback.from_user.full_name)
-        with models.SessionLocal() as db:
-            product = db.query(models.Product).filter_by(id=product_id, is_active=True).first()
-            if not product:
-                await callback.message.edit_text("❌ Товар не найден")
-                return
-            sessions = db.query(models.Session).filter(
-                models.Session.product_id == product_id,
-                models.Session.is_sold == False
-            ).order_by(models.Session.contacts_count).all()
-            if not sessions:
-                await callback.message.edit_text("❌ Нет доступных аккаунтов")
-                return
-            await callback.message.edit_text(f"🌟 <b>{product.name}</b>\n\nВыберите аккаунт (страница 1):",
-                                             parse_mode="HTML",
-                                             reply_markup=kb.sessions_keyboard(sessions, product_id, page=0))
-        await callback.answer()
-
-    @dp.callback_query(lambda c: c.data.startswith("sessions_page_"))
-    async def sessions_page(callback: types.CallbackQuery, bot: Bot):
-        _, _, product_id_str, page_str = callback.data.split("_")
-        product_id = int(product_id_str);
-        page = int(page_str)
-        await log_action(bot, callback.from_user.id, "sessions_page", f"Товар ID {product_id}, страница {page + 1}",
-                         username=callback.from_user.username, full_name=callback.from_user.full_name)
-        with models.SessionLocal() as db:
-            product = db.query(models.Product).filter_by(id=product_id).first()
-            if not product:
-                await callback.message.edit_text("❌ Товар не найден")
-                return
-            sessions = db.query(models.Session).filter(
-                models.Session.product_id == product_id,
-                models.Session.is_sold == False
-            ).order_by(models.Session.contacts_count).all()
-            await callback.message.edit_text(f"🌟 <b>{product.name}</b>\n\nВыберите аккаунт (страница {page + 1}):",
-                                             parse_mode="HTML",
-                                             reply_markup=kb.sessions_keyboard(sessions, product_id, page=page))
-        await callback.answer()
-
-    @dp.callback_query(lambda c: c.data.startswith("buy_session_"))
-    async def buy_session(callback: types.CallbackQuery, bot: Bot):
-        session_id = int(callback.data.split("_")[-1])
-        await log_action(bot, callback.from_user.id, "buy_session", f"Сессия ID {session_id}",
-                         username=callback.from_user.username, full_name=callback.from_user.full_name)
-        with models.SessionLocal() as db:
-            session = db.query(models.Session).filter_by(id=session_id, is_sold=False).first()
-            if not session:
-                await callback.message.edit_text("❌ Аккаунт уже куплен")
-                return
-            product = session.product
-            user = db.query(models.User).filter_by(tg_id=callback.from_user.id).first()
-            if not user:
-                user = models.User(tg_id=callback.from_user.id);
-                db.add(user);
-                db.commit()
-            has_balance = user.balance >= product.price
-            text = f"🌟 <b>{product.name}</b>\n👥 Контактов: {session.contacts_count}\n💵 Цена: {product.price} {product.currency}\n"
-            if has_balance:
-                text += f"💰 Ваш баланс: {user.balance:.2f} {CRYPTO_CURRENCY}"
-            await callback.message.edit_text(text, parse_mode="HTML",
-                                             reply_markup=kb.product_detail_keyboard(product.id, has_balance))
-            state = dp.fsm.get_context(bot, callback.message.chat.id, callback.from_user.id)
-            await state.update_data(pending_session_id=session_id)
-        await callback.answer()
-
-    @dp.callback_query(lambda c: c.data.startswith("buy_with_balance_"))
-    async def buy_with_balance(callback: types.CallbackQuery, bot: Bot):
-        product_id = int(callback.data.split("_")[-1])
-        await log_action(bot, callback.from_user.id, "buy_with_balance", f"Покупка товара ID {product_id} с баланса",
-                         username=callback.from_user.username, full_name=callback.from_user.full_name)
-        state = dp.fsm.get_context(bot, callback.message.chat.id, callback.from_user.id)
-        data = await state.get_data()
-        session_id = data.get("pending_session_id")
-        if not session_id:
-            await callback.answer("⚠️ Ошибка: выберите аккаунт заново", show_alert=True)
+# ------------------ Каталог и пагинация ------------------
+@dp.callback_query(lambda c: c.data == "catalog")
+async def show_catalog(callback: types.CallbackQuery, bot: Bot):
+    await log_action(bot, callback.from_user.id, "catalog", "Открыл каталог", username=callback.from_user.username, full_name=callback.from_user.full_name)
+    with models.SessionLocal() as db:
+        products = db.query(models.Product).filter(
+            models.Product.is_active == True,
+            models.Product.sessions.any(models.Session.is_sold == False)
+        ).order_by(models.Product.id).all()
+        if not products:
+            await callback.message.edit_text("📭 Товаров пока нет")
             return
-        user_id = callback.from_user.id
-        with models.SessionLocal() as db:
-            user = db.query(models.User).filter_by(tg_id=user_id).first()
-            session = db.query(models.Session).filter_by(id=session_id, is_sold=False).first()
-            if not session:
-                await callback.message.edit_text("❌ Аккаунт уже куплен");
-                return
-            product = session.product
-            if user.balance < product.price:
-                await callback.answer("❌ Недостаточно средств", show_alert=True);
-                return
-            user.balance -= product.price
-            session.is_sold = True
-            purchase = models.Purchase(user_id=user.id, product_id=product.id, session_id=session.id,
-                                       paid_with_balance=True)
-            db.add(purchase);
+        await callback.message.edit_text("📂 <b>Каталог</b> (страница 1)", parse_mode="HTML", reply_markup=kb.catalog_keyboard(products, page=0))
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("catalog_page_"))
+async def catalog_page(callback: types.CallbackQuery, bot: Bot):
+    page = int(callback.data.split("_")[-1])
+    await log_action(bot, callback.from_user.id, "catalog_page", f"Страница {page+1}", username=callback.from_user.username, full_name=callback.from_user.full_name)
+    with models.SessionLocal() as db:
+        products = db.query(models.Product).filter(
+            models.Product.is_active == True,
+            models.Product.sessions.any(models.Session.is_sold == False)
+        ).order_by(models.Product.id).all()
+        if not products:
+            await callback.message.edit_text("📭 Товаров нет")
+            return
+        await callback.message.edit_text(f"📂 <b>Каталог</b> (страница {page+1})", parse_mode="HTML", reply_markup=kb.catalog_keyboard(products, page=page))
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("view_product_"))
+async def view_product(callback: types.CallbackQuery, bot: Bot):
+    product_id = int(callback.data.split("_")[-1])
+    await log_action(bot, callback.from_user.id, "view_product", f"Товар ID {product_id}", username=callback.from_user.username, full_name=callback.from_user.full_name)
+    with models.SessionLocal() as db:
+        product = db.query(models.Product).filter_by(id=product_id, is_active=True).first()
+        if not product:
+            await callback.message.edit_text("❌ Товар не найден")
+            return
+        sessions = db.query(models.Session).filter(
+            models.Session.product_id == product_id,
+            models.Session.is_sold == False
+        ).order_by(models.Session.contacts_count).all()
+        if not sessions:
+            await callback.message.edit_text("❌ Нет доступных аккаунтов")
+            return
+        await callback.message.edit_text(f"🌟 <b>{product.name}</b>\n\nВыберите аккаунт (страница 1):", parse_mode="HTML", reply_markup=kb.sessions_keyboard(sessions, product_id, page=0))
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("sessions_page_"))
+async def sessions_page(callback: types.CallbackQuery, bot: Bot):
+    _, _, product_id_str, page_str = callback.data.split("_")
+    product_id = int(product_id_str); page = int(page_str)
+    await log_action(bot, callback.from_user.id, "sessions_page", f"Товар ID {product_id}, страница {page+1}", username=callback.from_user.username, full_name=callback.from_user.full_name)
+    with models.SessionLocal() as db:
+        product = db.query(models.Product).filter_by(id=product_id).first()
+        if not product:
+            await callback.message.edit_text("❌ Товар не найден")
+            return
+        sessions = db.query(models.Session).filter(
+            models.Session.product_id == product_id,
+            models.Session.is_sold == False
+        ).order_by(models.Session.contacts_count).all()
+        await callback.message.edit_text(f"🌟 <b>{product.name}</b>\n\nВыберите аккаунт (страница {page+1}):", parse_mode="HTML", reply_markup=kb.sessions_keyboard(sessions, product_id, page=page))
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("buy_session_"))
+async def buy_session(callback: types.CallbackQuery, bot: Bot):
+    session_id = int(callback.data.split("_")[-1])
+    await log_action(bot, callback.from_user.id, "buy_session", f"Сессия ID {session_id}", username=callback.from_user.username, full_name=callback.from_user.full_name)
+    with models.SessionLocal() as db:
+        session = db.query(models.Session).filter_by(id=session_id, is_sold=False).first()
+        if not session:
+            await callback.message.edit_text("❌ Аккаунт уже куплен")
+            return
+        product = session.product
+        user = db.query(models.User).filter_by(tg_id=callback.from_user.id).first()
+        if not user:
+            user = models.User(tg_id=callback.from_user.id); db.add(user); db.commit()
+        has_balance = user.balance >= product.price
+        text = f"🌟 <b>{product.name}</b>\n👥 Контактов: {session.contacts_count}\n💵 Цена: {product.price} {product.currency}\n"
+        if has_balance:
+            text += f"💰 Ваш баланс: {user.balance:.2f} {CRYPTO_CURRENCY}"
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb.product_detail_keyboard(product.id, has_balance))
+        state = dp.fsm.get_context(bot, callback.message.chat.id, callback.from_user.id)
+        await state.update_data(pending_session_id=session_id)
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("buy_with_balance_"))
+async def buy_with_balance(callback: types.CallbackQuery, bot: Bot):
+    product_id = int(callback.data.split("_")[-1])
+    await log_action(bot, callback.from_user.id, "buy_with_balance", f"Покупка товара ID {product_id} с баланса", username=callback.from_user.username, full_name=callback.from_user.full_name)
+    state = dp.fsm.get_context(bot, callback.message.chat.id, callback.from_user.id)
+    data = await state.get_data()
+    session_id = data.get("pending_session_id")
+    if not session_id:
+        await callback.answer("⚠️ Ошибка: выберите аккаунт заново", show_alert=True)
+        return
+    user_id = callback.from_user.id
+    with models.SessionLocal() as db:
+        user = db.query(models.User).filter_by(tg_id=user_id).first()
+        session = db.query(models.Session).filter_by(id=session_id, is_sold=False).first()
+        if not session:
+            await callback.message.edit_text("❌ Аккаунт уже куплен"); return
+        product = session.product
+        if user.balance < product.price:
+            await callback.answer("❌ Недостаточно средств", show_alert=True); return
+        user.balance -= product.price
+        session.is_sold = True
+        purchase = models.Purchase(user_id=user.id, product_id=product.id, session_id=session.id, paid_with_balance=True)
+        db.add(purchase); db.commit()
+        add_transaction(db, user.id, -product.price, "purchase", description=f"Товар {product.name}")
+        # Активация подписки VK
+        if product.name == "Подписка VK Спаммер":
+            expires = datetime.utcnow() + timedelta(days=30)
+            user.vk_spammer_subscription_until = expires
             db.commit()
-            add_transaction(db, user.id, -product.price, "purchase", description=f"Товар {product.name}")
-            if product.name == "Подписка VK Спаммер":
+            await callback.message.edit_text(f"✅ Подписка на VK Спаммер активирована до {expires.strftime('%d.%m.%Y')}")
+            await state.clear()
+            return
+        if session.is_file and session.file_data:
+            await bot.send_document(callback.message.chat.id, BufferedInputFile(session.file_data, filename=session.filename),
+                                    caption=f"✅ Оплачено с баланса!\n{product.name}\nКонтактов: {session.contacts_count}")
+            await bot.send_message(callback.message.chat.id, "📱 Инструкция для Telegram...", parse_mode="HTML")
+        else:
+            await callback.message.edit_text(
+                f"✅ Оплачено с баланса!\n\n{product.name}:\n<code>{session.data}</code>\n"
+                f"Контактов: {session.contacts_count}\nОстаток: {user.balance:.2f} {CRYPTO_CURRENCY}",
+                parse_mode="HTML"
+            )
+        await state.clear()
+        await bot.send_message(callback.message.chat.id, "🔄 Обновить каталог?",
+                               reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton("🛍 Обновить каталог", callback_data="catalog")]]))
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("pay_"))
+async def create_invoice_for_session(callback: types.CallbackQuery, bot: Bot):
+    product_id = int(callback.data.split("_")[-1])
+    await log_action(bot, callback.from_user.id, "pay_", f"Оплата криптой товара ID {product_id}", username=callback.from_user.username, full_name=callback.from_user.full_name)
+    state = dp.fsm.get_context(bot, callback.message.chat.id, callback.from_user.id)
+    data = await state.get_data()
+    session_id = data.get("pending_session_id")
+    if not session_id:
+        await callback.answer("⚠️ Ошибка: выберите аккаунт заново", show_alert=True); return
+    with models.SessionLocal() as db:
+        session = db.query(models.Session).filter_by(id=session_id, is_sold=False).first()
+        if not session:
+            await callback.message.edit_text("❌ Аккаунт уже куплен"); return
+        product = session.product
+        user = db.query(models.User).filter_by(tg_id=callback.from_user.id).first()
+        if not user:
+            user = models.User(tg_id=callback.from_user.id); db.add(user); db.commit()
+        try:
+            inv_id, pay_url = await crypto_api.create_invoice(product.price, product.currency)
+        except Exception as e:
+            await callback.message.edit_text(f"⚠️ Ошибка: {e}"); return
+        invoice = models.Invoice(user_id=user.id, product_id=product.id, crypto_invoice_id=inv_id,
+                                 amount=product.price, currency=product.currency, status="active", is_deposit=False,
+                                 session_id=session_id)
+        db.add(invoice); db.commit()
+        db_inv_id = invoice.id
+        await callback.message.edit_text(
+            f"💸 Счёт на <b>{product.price} {product.currency}</b> создан.\n\n"
+            "Оплатите и нажмите «Проверить оплату»:",
+            reply_markup=kb.invoice_keyboard(pay_url, db_inv_id)
+        )
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("check_"))
+async def check_payment(callback: types.CallbackQuery, bot: Bot):
+    invoice_db_id = int(callback.data.split("_")[1])
+    await log_action(bot, callback.from_user.id, "check_payment", f"Проверка счёта #{invoice_db_id}", username=callback.from_user.username, full_name=callback.from_user.full_name)
+    with models.SessionLocal() as db:
+        invoice = db.query(models.Invoice).filter_by(id=invoice_db_id).first()
+        if not invoice or invoice.status == "paid":
+            await callback.message.edit_text("✅ Счёт уже оплачен"); return
+        status = await crypto_api.check_invoice_status(invoice.crypto_invoice_id)
+        if status != "paid":
+            await callback.answer("⏳ Платёж ещё не получен", show_alert=True); return
+        invoice.status = "paid"
+        invoice.paid_at = datetime.utcnow()
+        user = db.query(models.User).filter_by(id=invoice.user_id).first()
+        if invoice.is_deposit:
+            user.balance += invoice.amount
+            db.commit()
+            add_transaction(db, user.id, invoice.amount, "deposit")
+            await callback.message.edit_text(f"✅ Баланс пополнен на {invoice.amount} {invoice.currency}\nНовый баланс: {user.balance:.2f} {invoice.currency}")
+        else:
+            session = db.query(models.Session).filter_by(id=invoice.session_id, is_sold=False).first()
+            if not session:
+                await callback.message.edit_text("❌ Аккаунт уже куплен"); return
+            session.is_sold = True
+            purchase = models.Purchase(user_id=user.id, product_id=invoice.product_id, session_id=session.id, paid_with_balance=False)
+            db.add(purchase); db.commit()
+            add_transaction(db, user.id, -invoice.amount, "purchase", description=f"Товар {invoice.product.name}")
+            if invoice.product.name == "Подписка VK Спаммер":
                 expires = datetime.utcnow() + timedelta(days=30)
                 user.vk_spammer_subscription_until = expires
                 db.commit()
-                await callback.message.edit_text(
-                    f"✅ Подписка на VK Спаммер активирована до {expires.strftime('%d.%m.%Y')}")
-                await state.clear()
+                await callback.message.edit_text(f"✅ Подписка на VK Спаммер активирована до {expires.strftime('%d.%m.%Y')}")
+                await callback.message.delete()
                 return
             if session.is_file and session.file_data:
-                await bot.send_document(callback.message.chat.id,
-                                        BufferedInputFile(session.file_data, filename=session.filename),
-                                        caption=f"✅ Оплачено с баланса!\n{product.name}\nКонтактов: {session.contacts_count}")
-                await bot.send_message(callback.message.chat.id, "📱 Инструкция для Telegram...", parse_mode="HTML")
+                await bot.send_document(callback.message.chat.id, BufferedInputFile(session.file_data, filename=session.filename),
+                                        caption=f"✅ Оплата получена!\n{invoice.product.name}\nКонтактов: {session.contacts_count}")
+                await bot.send_message(callback.message.chat.id, "📱 Инструкция...", parse_mode="HTML")
             else:
                 await callback.message.edit_text(
-                    f"✅ Оплачено с баланса!\n\n{product.name}:\n<code>{session.data}</code>\n"
-                    f"Контактов: {session.contacts_count}\nОстаток: {user.balance:.2f} {CRYPTO_CURRENCY}",
+                    f"✅ Оплата получена!\n\n{invoice.product.name}:\n<code>{session.data}</code>\n"
+                    f"Контактов: {session.contacts_count}",
                     parse_mode="HTML"
                 )
-            await state.clear()
-            await bot.send_message(callback.message.chat.id, "🔄 Обновить каталог?",
-                                   reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                                       [InlineKeyboardButton("🛍 Обновить каталог", callback_data="catalog")]]))
-        await callback.answer()
-
-    @dp.callback_query(lambda c: c.data.startswith("pay_"))
-    async def create_invoice_for_session(callback: types.CallbackQuery, bot: Bot):
-        product_id = int(callback.data.split("_")[-1])
-        await log_action(bot, callback.from_user.id, "pay_", f"Оплата криптой товара ID {product_id}",
-                         username=callback.from_user.username, full_name=callback.from_user.full_name)
-        state = dp.fsm.get_context(bot, callback.message.chat.id, callback.from_user.id)
-        data = await state.get_data()
-        session_id = data.get("pending_session_id")
-        if not session_id:
-            await callback.answer("⚠️ Ошибка: выберите аккаунт заново", show_alert=True);
-            return
-        with models.SessionLocal() as db:
-            session = db.query(models.Session).filter_by(id=session_id, is_sold=False).first()
-            if not session:
-                await callback.message.edit_text("❌ Аккаунт уже куплен");
-                return
-            product = session.product
-            user = db.query(models.User).filter_by(tg_id=callback.from_user.id).first()
-            if not user:
-                user = models.User(tg_id=callback.from_user.id);
-                db.add(user);
-                db.commit()
-            try:
-                inv_id, pay_url = await crypto_api.create_invoice(product.price, product.currency)
-            except Exception as e:
-                await callback.message.edit_text(f"⚠️ Ошибка: {e}");
-                return
-            invoice = models.Invoice(user_id=user.id, product_id=product.id, crypto_invoice_id=inv_id,
-                                     amount=product.price, currency=product.currency, status="active", is_deposit=False,
-                                     session_id=session_id)
-            db.add(invoice);
-            db.commit()
-            db_inv_id = invoice.id
-            await callback.message.edit_text(
-                f"💸 Счёт на <b>{product.price} {product.currency}</b> создан.\n\n"
-                "Оплатите и нажмите «Проверить оплату»:",
-                reply_markup=kb.invoice_keyboard(pay_url, db_inv_id)
-            )
-        await callback.answer()
-
-    @dp.callback_query(lambda c: c.data.startswith("check_"))
-    async def check_payment(callback: types.CallbackQuery, bot: Bot):
-        invoice_db_id = int(callback.data.split("_")[1])
-        await log_action(bot, callback.from_user.id, "check_payment", f"Проверка счёта #{invoice_db_id}",
-                         username=callback.from_user.username, full_name=callback.from_user.full_name)
-        with models.SessionLocal() as db:
-            invoice = db.query(models.Invoice).filter_by(id=invoice_db_id).first()
-            if not invoice or invoice.status == "paid":
-                await callback.message.edit_text("✅ Счёт уже оплачен");
-                return
-            status = await crypto_api.check_invoice_status(invoice.crypto_invoice_id)
-            if status != "paid":
-                await callback.answer("⏳ Платёж ещё не получен", show_alert=True);
-                return
-            invoice.status = "paid"
-            invoice.paid_at = datetime.utcnow()
-            user = db.query(models.User).filter_by(id=invoice.user_id).first()
-            if invoice.is_deposit:
-                user.balance += invoice.amount
-                db.commit()
-                add_transaction(db, user.id, invoice.amount, "deposit")
-                await log_action(bot, user.tg_id, "deposit", f"{invoice.amount} {invoice.currency}",
-                                 username=user.username, full_name=user.full_name)
-                await callback.message.edit_text(
-                    f"✅ Баланс пополнен на {invoice.amount} {invoice.currency}\nНовый баланс: {user.balance:.2f} {invoice.currency}")
-            else:
-                session = db.query(models.Session).filter_by(id=invoice.session_id, is_sold=False).first()
-                if not session:
-                    await callback.message.edit_text("❌ Аккаунт уже куплен");
-                    return
-                session.is_sold = True
-                purchase = models.Purchase(user_id=user.id, product_id=invoice.product_id, session_id=session.id,
-                                           paid_with_balance=False)
-                db.add(purchase);
-                db.commit()
-                add_transaction(db, user.id, -invoice.amount, "purchase", description=f"Товар {invoice.product.name}")
-                if invoice.product.name == "Подписка VK Спаммер":
-                    expires = datetime.utcnow() + timedelta(days=30)
-                    user.vk_spammer_subscription_until = expires
+            purchases_count = db.query(models.Purchase).filter_by(user_id=user.id).count()
+            if purchases_count == 1 and user.referred_by:
+                referrer = db.query(models.User).filter_by(tg_id=user.referred_by).first()
+                if referrer:
+                    bonus = invoice.amount * 0.10
+                    referrer.referral_balance += bonus
+                    referrer.total_referral_earnings += bonus
+                    referrer.referral_count += 1
                     db.commit()
-                    await callback.message.edit_text(
-                        f"✅ Подписка на VK Спаммер активирована до {expires.strftime('%d.%m.%Y')}")
-                    await callback.message.delete()
-                    return
-                if session.is_file and session.file_data:
-                    await bot.send_document(callback.message.chat.id,
-                                            BufferedInputFile(session.file_data, filename=session.filename),
-                                            caption=f"✅ Оплата получена!\n{invoice.product.name}\nКонтактов: {session.contacts_count}")
-                    await bot.send_message(callback.message.chat.id, "📱 Инструкция...", parse_mode="HTML")
-                else:
-                    await callback.message.edit_text(
-                        f"✅ Оплата получена!\n\n{invoice.product.name}:\n<code>{session.data}</code>\n"
-                        f"Контактов: {session.contacts_count}",
-                        parse_mode="HTML"
-                    )
-                purchases_count = db.query(models.Purchase).filter_by(user_id=user.id).count()
-                if purchases_count == 1 and user.referred_by:
-                    referrer = db.query(models.User).filter_by(tg_id=user.referred_by).first()
-                    if referrer:
-                        bonus = invoice.amount * 0.10
-                        referrer.referral_balance += bonus
-                        referrer.total_referral_earnings += bonus
-                        referrer.referral_count += 1
-                        db.commit()
-                        add_transaction(db, referrer.id, bonus, "bonus", description=f"Реферал {user.username}")
-                        try:
-                            await bot.send_message(referrer.tg_id,
-                                                   f"🎉 Реферал @{user.username} купил! Бонус {bonus} {invoice.currency}")
-                        except:
-                            pass
-                await bot.send_message(callback.message.chat.id, "🔄 Обновить каталог?",
-                                       reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                                           [InlineKeyboardButton("🛍 Обновить каталог", callback_data="catalog")]]))
-            await callback.message.delete()
-        await callback.answer()
+                    add_transaction(db, referrer.id, bonus, "bonus", description=f"Реферал {user.username}")
+                    try:
+                        await bot.send_message(referrer.tg_id, f"🎉 Реферал @{user.username} купил! Бонус {bonus} {invoice.currency}")
+                    except: pass
+            await bot.send_message(callback.message.chat.id, "🔄 Обновить каталог?",
+                                   reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton("🛍 Обновить каталог", callback_data="catalog")]]))
+        await callback.message.delete()
+    await callback.answer()
 
-    # ------------------ Мои покупки ------------------
-    @dp.callback_query(lambda c: c.data == "my_purchases")
-    async def my_purchases(callback: types.CallbackQuery, bot: Bot):
-        await log_action(bot, callback.from_user.id, "my_purchases", "Просмотр своих покупок",
-                         username=callback.from_user.username, full_name=callback.from_user.full_name)
-        with models.SessionLocal() as db:
-            user = db.query(models.User).filter_by(tg_id=callback.from_user.id).first()
-            if not user: await callback.message.edit_text("📭 Нет покупок"); return
-            purchases = db.query(models.Purchase).filter_by(user_id=user.id).order_by(
-                models.Purchase.purchased_at.desc()).all()
-            if not purchases:
-                await callback.message.edit_text("📭 Нет покупок")
-                return
-            text = "📦 <b>Ваши покупки</b>\n\n"
-            for p in purchases:
-                text += f"🔹 {p.product.name} — {p.purchased_at.strftime('%d.%m.%Y')}\n"
-                if p.paid_with_balance:
-                    text += "   💳 С баланса\n"
-                else:
-                    text += "   💸 Криптовалюта\n"
-                if p.session.is_file:
-                    text += f"   📎 Файл: {p.session.filename}\n"
-                else:
-                    text += f"   📝 Данные: {p.session.data}\n\n"
-            await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb.main_menu_keyboard())
-        await callback.answer()
-
-    # ------------------ Рефералы ------------------
-    @dp.callback_query(lambda c: c.data == "my_referrals")
-    async def my_referrals(callback: types.CallbackQuery, bot: Bot):
-        await log_action(bot, callback.from_user.id, "my_referrals", "Просмотр рефералов",
-                         username=callback.from_user.username, full_name=callback.from_user.full_name)
-        with models.SessionLocal() as db:
-            user = db.query(models.User).filter_by(tg_id=callback.from_user.id).first()
-            if not user: return
-            invited = db.query(models.User).filter_by(referred_by=user.tg_id).all()
-            bot_username = (await bot.get_me()).username
-            ref_link = f"https://t.me/{bot_username}?start=ref_{user.tg_id}"
-            text = f"👥 <b>Ваша реферальная ссылка</b>\n{ref_link}\n\n💰 Бонусный баланс: {user.referral_balance:.2f} {CRYPTO_CURRENCY}\n📊 Приглашено: {len(invited)}\n\n"
-            if invited:
-                text += "Приглашённые:\n" + "\n".join([f"• {u.full_name or u.username or u.tg_id}" for u in invited])
-            else:
-                text += "Приглашайте друзей – 10% от их первых покупок!"
-            await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb.main_menu_keyboard())
-        await callback.answer()
-
-    # ------------------ Поддержка (с исправленным экранированием и без parse_mode) ------------------
-    @dp.callback_query(lambda c: c.data == "support")
-    async def support_start(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
-        await log_action(bot, callback.from_user.id, "support", "Открыл окно поддержки",
-                         username=callback.from_user.username, full_name=callback.from_user.full_name)
-        await callback.message.edit_text("💬 Напишите ваше сообщение администратору.\n\nЧтобы отменить, нажмите /cancel")
-        await state.set_state("support_waiting")
-        await callback.answer()
-
-    @dp.message(StateFilter("support_waiting"))
-    async def support_send(message: types.Message, state: FSMContext, bot: Bot):
-        user_id = message.from_user.id
-        username = message.from_user.username
-        full_name = message.from_user.full_name
-        text = message.text
-        if text == "/cancel":
-            await message.answer("❌ Отменено.")
-            await state.clear()
+# ------------------ Мои покупки ------------------
+@dp.callback_query(lambda c: c.data == "my_purchases")
+async def my_purchases(callback: types.CallbackQuery, bot: Bot):
+    await log_action(bot, callback.from_user.id, "my_purchases", "Просмотр своих покупок", username=callback.from_user.username, full_name=callback.from_user.full_name)
+    with models.SessionLocal() as db:
+        user = db.query(models.User).filter_by(tg_id=callback.from_user.id).first()
+        if not user: await callback.message.edit_text("📭 Нет покупок"); return
+        purchases = db.query(models.Purchase).filter_by(user_id=user.id).order_by(models.Purchase.purchased_at.desc()).all()
+        if not purchases:
+            await callback.message.edit_text("📭 Нет покупок")
             return
-        await log_action(bot, user_id, "support_send", f"Сообщение: {text[:100]}", username=username,
-                         full_name=full_name)
-        safe_text = html.escape(text)
-        for admin_id in ADMIN_IDS:
-            try:
-                # Отправляем без parse_mode, чтобы избежать ошибок
-                await bot.send_message(admin_id,
-                                       f"📩 Новое сообщение от пользователя\n👤 {user_id}\n💬 {safe_text}\n\nЧтобы ответить, используйте:\n/reply_{user_id} <текст>")
-            except Exception as e:
-                print(f"Ошибка отправки админу {admin_id}: {e}")
-        await message.answer("✅ Сообщение отправлено администратору. Ожидайте ответа.")
+        text = "📦 <b>Ваши покупки</b>\n\n"
+        for p in purchases:
+            text += f"🔹 {p.product.name} — {p.purchased_at.strftime('%d.%m.%Y')}\n"
+            if p.paid_with_balance: text += "   💳 С баланса\n"
+            else: text += "   💸 Криптовалюта\n"
+            if p.session.is_file: text += f"   📎 Файл: {p.session.filename}\n"
+            else: text += f"   📝 Данные: {p.session.data}\n\n"
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb.main_menu_keyboard())
+    await callback.answer()
+
+# ------------------ Рефералы ------------------
+@dp.callback_query(lambda c: c.data == "my_referrals")
+async def my_referrals(callback: types.CallbackQuery, bot: Bot):
+    await log_action(bot, callback.from_user.id, "my_referrals", "Просмотр рефералов", username=callback.from_user.username, full_name=callback.from_user.full_name)
+    with models.SessionLocal() as db:
+        user = db.query(models.User).filter_by(tg_id=callback.from_user.id).first()
+        if not user: return
+        invited = db.query(models.User).filter_by(referred_by=user.tg_id).all()
+        bot_username = (await bot.get_me()).username
+        ref_link = f"https://t.me/{bot_username}?start=ref_{user.tg_id}"
+        text = f"👥 <b>Ваша реферальная ссылка</b>\n{ref_link}\n\n💰 Бонусный баланс: {user.referral_balance:.2f} {CRYPTO_CURRENCY}\n📊 Приглашено: {len(invited)}\n\n"
+        if invited:
+            text += "Приглашённые:\n" + "\n".join([f"• {u.full_name or u.username or u.tg_id}" for u in invited])
+        else:
+            text += "Приглашайте друзей – 10% от их первых покупок!"
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb.main_menu_keyboard())
+    await callback.answer()
+
+# ------------------ Поддержка (без HTML-тегов) ------------------
+@dp.callback_query(lambda c: c.data == "support")
+async def support_start(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
+    await log_action(bot, callback.from_user.id, "support", "Открыл окно поддержки", username=callback.from_user.username, full_name=callback.from_user.full_name)
+    await callback.message.edit_text("💬 Напишите ваше сообщение администратору.\n\nЧтобы отменить, нажмите /cancel")
+    await state.set_state("support_waiting")
+    await callback.answer()
+
+@dp.message(StateFilter("support_waiting"))
+async def support_send(message: types.Message, state: FSMContext, bot: Bot):
+    user_id = message.from_user.id
+    username = message.from_user.username
+    full_name = message.from_user.full_name
+    text = message.text
+    if text == "/cancel":
+        await message.answer("❌ Отменено.")
         await state.clear()
-
-    # ------------------ Исправленный обработчик ответа админа (/reply) ------------------
-    @dp.message(Command(commands=["reply"], prefix="/"))
-    async def admin_reply(message: types.Message, bot: Bot):
-        if not is_admin(message.from_user.id):
-            await message.answer("❌ Нет прав.")
-            return
-        # Разделяем команду и аргументы
-        parts = message.text.split(maxsplit=2)
-        if len(parts) < 3:
-            await message.answer("❌ Используйте: /reply_<user_id> <текст>")
-            return
-        # Извлекаем user_id из первого аргумента (например, reply_123456789)
+        return
+    await log_action(bot, user_id, "support_send", f"Сообщение: {text[:100]}", username=username, full_name=full_name)
+    safe_text = html.escape(text)
+    for admin_id in ADMIN_IDS:
         try:
-            # Пробуем извлечь число из строки вида reply_123456789
-            if '_' in parts[1]:
-                user_id = int(parts[1].split('_')[1])
-            else:
-                user_id = int(parts[1])
-            reply_text = parts[2]
-        except (IndexError, ValueError):
-            await message.answer("❌ Неверный формат. Используйте: /reply_<user_id> <текст>")
-            return
-        await log_action(bot, message.from_user.id, "admin_reply", f"Ответ пользователю {user_id}: {reply_text[:100]}",
-                         username=message.from_user.username, full_name=message.from_user.full_name)
-        safe_reply = html.escape(reply_text)
-        try:
-            await bot.send_message(user_id, f"💬 <b>Ответ администратора:</b>\n{safe_reply}", parse_mode="HTML")
-            await message.answer("✅ Ответ отправлен.")
+            await bot.send_message(admin_id, f"📩 Новое сообщение от пользователя\n👤 {user_id}\n💬 {safe_text}\n\nЧтобы ответить, используйте:\n/reply_{user_id} <текст>")
         except Exception as e:
-            await message.answer(f"❌ Ошибка при отправке: {e}")
+            print(f"Ошибка отправки админу {admin_id}: {e}")
+    await message.answer("✅ Сообщение отправлено администратору. Ожидайте ответа.")
+    await state.clear()
+
+@dp.message(Command(commands=["reply"], prefix="/"))
+async def admin_reply(message: types.Message, bot: Bot):
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Нет прав.")
+        return
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3:
+        await message.answer("❌ Используйте: /reply_<user_id> <текст>")
+        return
+    try:
+        user_id = int(parts[1].split('_')[1])
+        reply_text = parts[2]
+    except (IndexError, ValueError):
+        await message.answer("❌ Неверный формат. Используйте: /reply_<user_id> <текст>")
+        return
+    await log_action(bot, message.from_user.id, "admin_reply", f"Ответ пользователю {user_id}: {reply_text[:100]}", username=message.from_user.username, full_name=message.from_user.full_name)
+    safe_reply = html.escape(reply_text)
+    try:
+        await bot.send_message(user_id, f"💬 <b>Ответ администратора:</b>\n{safe_reply}", parse_mode="HTML")
+        await message.answer("✅ Ответ отправлен.")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при отправке: {e}")
+
 # ------------------ Админ-панель ------------------
 @dp.message(Command("admin"))
 async def admin_cmd(message: types.Message, bot: Bot):
     if not is_admin(message.from_user.id):
         await message.answer("❌ Нет прав.")
         return
-    await log_action(bot, message.from_user.id, "admin", "Открыл админ-панель")
+    await log_action(bot, message.from_user.id, "admin", "Открыл админ-панель", username=message.from_user.username, full_name=message.from_user.full_name)
     await message.answer("🔧 <b>Админ-панель</b>", parse_mode="HTML", reply_markup=kb.admin_menu_keyboard())
 
 @dp.callback_query(lambda c: c.data == "admin_menu")
@@ -739,7 +675,7 @@ async def admin_menu_back(callback: types.CallbackQuery, bot: Bot):
     if not is_admin(callback.from_user.id):
         await callback.answer("Нет прав", show_alert=True)
         return
-    await log_action(bot, callback.from_user.id, "admin_menu", "Вернулся в админ-меню")
+    await log_action(bot, callback.from_user.id, "admin_menu", "Вернулся в админ-меню", username=callback.from_user.username, full_name=callback.from_user.full_name)
     await callback.message.edit_text("🔧 <b>Админ-панель</b>", parse_mode="HTML", reply_markup=kb.admin_menu_keyboard())
     await callback.answer()
 
@@ -748,7 +684,7 @@ async def admin_stats(callback: types.CallbackQuery, bot: Bot):
     if not is_admin(callback.from_user.id):
         await callback.answer("Нет прав", show_alert=True)
         return
-    await log_action(bot, callback.from_user.id, "admin_stats", "Просмотр статистики")
+    await log_action(bot, callback.from_user.id, "admin_stats", "Просмотр статистики", username=callback.from_user.username, full_name=callback.from_user.full_name)
     with models.SessionLocal() as db:
         total_users = db.query(models.User).count()
         total_products = db.query(models.Product).count()
@@ -757,7 +693,10 @@ async def admin_stats(callback: types.CallbackQuery, bot: Bot):
         total_purchases = db.query(models.Purchase).count()
         total_deposits = db.query(models.Invoice).filter_by(is_deposit=True, status="paid").with_entities(func.sum(models.Invoice.amount)).scalar() or 0
         text = f"📊 Статистика\n👥 Пользователей: {total_users}\n📦 Товаров: {total_products}\n🔑 Сессий: {total_sessions}\n✅ Продано: {sold}\n🛒 Покупок: {total_purchases}\n💰 Пополнений: {total_deposits:.2f} {CRYPTO_CURRENCY}"
-        await callback.message.edit_text(text, reply_markup=kb.admin_menu_keyboard(), parse_mode="HTML")
+        try:
+            await callback.message.edit_text(text, reply_markup=kb.admin_menu_keyboard(), parse_mode="HTML")
+        except:
+            await callback.answer()
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "admin_logs")
@@ -765,7 +704,7 @@ async def admin_logs(callback: types.CallbackQuery, bot: Bot):
     if not is_admin(callback.from_user.id):
         await callback.answer("Нет прав", show_alert=True)
         return
-    await log_action(bot, callback.from_user.id, "admin_logs", "Просмотр логов")
+    await log_action(bot, callback.from_user.id, "admin_logs", "Просмотр логов", username=callback.from_user.username, full_name=callback.from_user.full_name)
     with models.SessionLocal() as db:
         logs = db.query(models.Log).order_by(models.Log.created_at.desc()).limit(10).all()
         if not logs:
@@ -780,20 +719,22 @@ async def admin_logs(callback: types.CallbackQuery, bot: Bot):
         await callback.message.edit_text(text, reply_markup=kb.admin_menu_keyboard(), parse_mode="HTML")
     await callback.answer()
 
+# ------------------ Заявки на вывод (для админа) ------------------
 @dp.callback_query(lambda c: c.data == "admin_withdrawals")
 async def admin_withdrawals(callback: types.CallbackQuery, bot: Bot):
     if not is_admin(callback.from_user.id):
         await callback.answer("Нет прав", show_alert=True)
         return
+    await log_action(bot, callback.from_user.id, "admin_withdrawals", "Просмотр заявок на вывод", username=callback.from_user.username, full_name=callback.from_user.full_name)
     with models.SessionLocal() as db:
-        requests = db.query(models.WithdrawalRequest).filter_by(status='pending').order_by(models.WithdrawalRequest.created_at.desc()).all()
-        if not requests:
+        withdrawals = db.query(models.WithdrawalRequest).filter_by(status='pending').order_by(models.WithdrawalRequest.created_at.desc()).all()
+        if not withdrawals:
             await callback.message.edit_text("📭 Нет активных заявок на вывод.", reply_markup=kb.admin_menu_keyboard())
             return
-        text = "💸 <b>Заявки на вывод (ожидают обработки):</b>\n\n"
-        for r in requests:
-            user = r.user
-            text += f"🆔 #{r.id} | Пользователь {user.tg_id} | Сумма {r.amount} {CRYPTO_CURRENCY} | Кошелёк: {r.wallet}\n"
+        text = "💸 <b>Активные заявки на вывод:</b>\n\n"
+        for w in withdrawals:
+            user = w.user
+            text += f"🆔 Заявка #{w.id}\n👤 Пользователь: {user.tg_id}\n💰 Сумма: {w.amount} {CRYPTO_CURRENCY}\n💳 Кошелёк: {w.wallet}\n🕒 Создана: {w.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
         await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb.admin_menu_keyboard())
     await callback.answer()
 
@@ -802,7 +743,7 @@ async def admin_give_vk_subscription_start(callback: types.CallbackQuery, state:
     if not is_admin(callback.from_user.id):
         await callback.answer("Нет прав", show_alert=True)
         return
-    await log_action(bot, callback.from_user.id, "admin_give_vk_subscription", "Начало выдачи подписки VK")
+    await log_action(bot, callback.from_user.id, "admin_give_vk_subscription", "Начало выдачи подписки VK", username=callback.from_user.username, full_name=callback.from_user.full_name)
     await callback.message.edit_text("🎟 Введите Telegram ID пользователя, которому хотите выдать подписку VK:")
     await state.set_state(GiveVKSubscription.user_id)
     await callback.answer()
@@ -838,7 +779,7 @@ async def admin_give_vk_subscription_months(message: types.Message, state: FSMCo
             expires = datetime.utcnow() + timedelta(days=30*months)
             user.vk_spammer_subscription_until = expires
             db.commit()
-            await log_action(bot, message.from_user.id, "admin_give_vk_subscription", f"Выдана подписка на {months} месяцев пользователю {user.tg_id}")
+            await log_action(bot, message.from_user.id, "admin_give_vk_subscription", f"Выдана подписка на {months} месяцев пользователю {user.tg_id}", username=message.from_user.username, full_name=message.from_user.full_name)
             await message.answer(f"✅ Пользователю {user.tg_id} выдана подписка VK на {months} месяцев (до {expires.strftime('%d.%m.%Y')}).", reply_markup=kb.admin_menu_keyboard())
         await state.clear()
     except ValueError:
@@ -849,6 +790,7 @@ async def admin_give_vk_subscription_months(message: types.Message, state: FSMCo
 @dp.callback_query(lambda c: c.data == "admin_add_product")
 async def admin_add_product_start(callback: types.CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id): return
+    await log_action(bot, callback.from_user.id, "admin_add_product", "Начало добавления товара", username=callback.from_user.username, full_name=callback.from_user.full_name)
     await callback.message.edit_text("➕ Введите название товара:")
     await state.set_state(AddProduct.name)
     await callback.answer()
@@ -882,7 +824,7 @@ async def add_product_currency(message: types.Message, state: FSMContext, bot: B
     with models.SessionLocal() as db:
         product = models.Product(name=data['name'], description=data['description'], price=data['price'], currency=currency, is_active=True)
         db.add(product); db.commit()
-        await log_action(bot, message.from_user.id, "admin_add_product", f"Товар ID {product.id}: {product.name}")
+        await log_action(bot, message.from_user.id, "admin_add_product", f"Товар ID {product.id}: {product.name}", username=message.from_user.username, full_name=message.from_user.full_name)
         await message.answer(f"✅ Товар «{product.name}» добавлен. Цена: {product.price} {product.currency}", reply_markup=kb.admin_menu_keyboard())
     await state.clear()
 
@@ -890,6 +832,7 @@ async def add_product_currency(message: types.Message, state: FSMContext, bot: B
 @dp.callback_query(lambda c: c.data == "admin_change_price")
 async def admin_change_price_start(callback: types.CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id): return
+    await log_action(bot, callback.from_user.id, "admin_change_price", "Начало изменения цены", username=callback.from_user.username, full_name=callback.from_user.full_name)
     await callback.message.edit_text("💰 Введите ID товара, цену которого хотите изменить:")
     await state.set_state(ChangeProductPrice.product_id)
     await callback.answer()
@@ -934,7 +877,7 @@ async def change_price_new_price(message: types.Message, state: FSMContext, bot:
             old_price = product.price
             product.price = new_price
             db.commit()
-            await log_action(bot, message.from_user.id, "admin_change_price", f"Товар ID {product_id}: цена изменена с {old_price} на {new_price} {product.currency}")
+            await log_action(bot, message.from_user.id, "admin_change_price", f"Товар ID {product_id}: цена изменена с {old_price} на {new_price} {product.currency}", username=message.from_user.username, full_name=message.from_user.full_name)
             await message.answer(
                 f"✅ Цена товара <b>{product.name}</b> изменена.\n"
                 f"💰 Было: <code>{old_price} {product.currency}</code>\n"
@@ -953,6 +896,7 @@ async def admin_toggle_product_start(callback: types.CallbackQuery, state: FSMCo
     if not is_admin(callback.from_user.id):
         await callback.answer("Нет прав", show_alert=True)
         return
+    await log_action(bot, callback.from_user.id, "admin_toggle_product", "Открыл список товаров для скрытия/показа", username=callback.from_user.username, full_name=callback.from_user.full_name)
     with models.SessionLocal() as db:
         products = db.query(models.Product).all()
         if not products:
@@ -979,7 +923,7 @@ async def toggle_product_active(message: types.Message, state: FSMContext, bot: 
             product.is_active = not product.is_active
             db.commit()
             new_status = "активен" if product.is_active else "скрыт"
-            await log_action(bot, message.from_user.id, "admin_toggle_product", f"Товар ID {product_id} теперь {new_status}")
+            await log_action(bot, message.from_user.id, "admin_toggle_product", f"Товар ID {product_id} теперь {new_status}", username=message.from_user.username, full_name=message.from_user.full_name)
             await message.answer(f"Товар «{product.name}» теперь {new_status}.", reply_markup=kb.admin_menu_keyboard())
     except ValueError:
         await message.answer("Введите число.")
@@ -989,6 +933,7 @@ async def toggle_product_active(message: types.Message, state: FSMContext, bot: 
 @dp.callback_query(lambda c: c.data == "admin_add_tdata")
 async def admin_add_tdata_start(callback: types.CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id): return
+    await log_action(bot, callback.from_user.id, "admin_add_tdata", "Начало добавления tdata", username=callback.from_user.username, full_name=callback.from_user.full_name)
     with models.SessionLocal() as db:
         products = db.query(models.Product).all()
         if not products:
@@ -1028,6 +973,7 @@ async def add_tdata_file(message: types.Message, state: FSMContext, bot: Bot):
     file = message.document
     if not file.file_name.endswith('.zip'):
         await message.answer("❌ Отправьте ZIP-файл"); return
+    await log_action(bot, message.from_user.id, "add_tdata_file", f"Файл: {file.file_name}", username=message.from_user.username, full_name=message.from_user.full_name)
     file_info = await bot.get_file(file.file_id)
     downloaded = await bot.download_file(file_info.file_path)
     file_bytes = downloaded.read()
@@ -1036,7 +982,6 @@ async def add_tdata_file(message: types.Message, state: FSMContext, bot: Bot):
         session = models.Session(product_id=data['product_id'], file_data=file_bytes, filename=file.file_name,
                                  is_file=True, contacts_count=data['contacts_count'], is_sold=False)
         db.add(session); db.commit()
-        await log_action(bot, message.from_user.id, "admin_add_tdata", f"Добавлен tdata к товару ID {data['product_id']}")
         await message.answer(f"✅ Сессия добавлена. Файл: {file.file_name}, контактов: {data['contacts_count']}", reply_markup=kb.admin_menu_keyboard())
     await state.clear()
 
@@ -1048,6 +993,7 @@ async def add_tdata_invalid(message: types.Message):
 @dp.callback_query(lambda c: c.data == "admin_add_text")
 async def admin_add_text_start(callback: types.CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id): return
+    await log_action(bot, callback.from_user.id, "admin_add_text", "Начало добавления текстовой сессии", username=callback.from_user.username, full_name=callback.from_user.full_name)
     with models.SessionLocal() as db:
         products = db.query(models.Product).all()
         if not products:
@@ -1086,11 +1032,11 @@ async def add_text_contacts(message: types.Message, state: FSMContext):
 async def add_text_data(message: types.Message, state: FSMContext, bot: Bot):
     text_data = message.text
     data = await state.get_data()
+    await log_action(bot, message.from_user.id, "add_text_data", f"Текст: {text_data[:50]}", username=message.from_user.username, full_name=message.from_user.full_name)
     with models.SessionLocal() as db:
         session = models.Session(product_id=data['product_id'], data=text_data, is_file=False,
                                  contacts_count=data['contacts_count'], is_sold=False)
         db.add(session); db.commit()
-        await log_action(bot, message.from_user.id, "admin_add_text", f"Добавлена текстовая сессия к товару ID {data['product_id']}")
         await message.answer(f"✅ Текстовая сессия добавлена. Контактов: {data['contacts_count']}", reply_markup=kb.admin_menu_keyboard())
     await state.clear()
 
@@ -1098,12 +1044,14 @@ async def add_text_data(message: types.Message, state: FSMContext, bot: Bot):
 @dp.callback_query(lambda c: c.data == "admin_promocodes")
 async def admin_promocodes_menu(callback: types.CallbackQuery, bot: Bot):
     if not is_admin(callback.from_user.id): return
+    await log_action(bot, callback.from_user.id, "admin_promocodes", "Открыл меню промокодов", username=callback.from_user.username, full_name=callback.from_user.full_name)
     await callback.message.edit_text("🎟 Управление промокодами:", reply_markup=kb.admin_promocodes_keyboard())
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "admin_create_promo")
 async def admin_create_promo_start(callback: types.CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id): return
+    await log_action(bot, callback.from_user.id, "admin_create_promo", "Начало создания промокода", username=callback.from_user.username, full_name=callback.from_user.full_name)
     await callback.message.edit_text("Введите сумму промокода в USDT (например, 5):")
     await state.set_state(CreatePromoCode.amount)
     await callback.answer()
@@ -1146,7 +1094,7 @@ async def create_promo_expires(message: types.Message, state: FSMContext, bot: B
         promo = models.PromoCode(code=code, amount=data['amount'], max_activations=data['max_activations'],
                                  expires_at=expires_at, created_by=message.from_user.id)
         db.add(promo); db.commit()
-        await log_action(bot, message.from_user.id, "create_promo", f"Создан промокод {code} на {data['amount']} USDT")
+        await log_action(bot, message.from_user.id, "create_promo", f"Создан промокод {code} на {data['amount']} USDT", username=message.from_user.username, full_name=message.from_user.full_name)
         await message.answer(
             f"✅ Промокод создан!\n\n🎟 Код: <code>{code}</code>\n💰 Сумма: {data['amount']} {CRYPTO_CURRENCY}\n🔢 Лимит: {data['max_activations']}\n⏳ Срок: {'бессрочный' if expires_at is None else expires_at.strftime('%d.%m.%Y')}",
             parse_mode="HTML", reply_markup=kb.admin_menu_keyboard()
@@ -1156,6 +1104,7 @@ async def create_promo_expires(message: types.Message, state: FSMContext, bot: B
 @dp.callback_query(lambda c: c.data == "admin_list_promos")
 async def admin_list_promos(callback: types.CallbackQuery, bot: Bot):
     if not is_admin(callback.from_user.id): return
+    await log_action(bot, callback.from_user.id, "admin_list_promos", "Просмотр списка промокодов", username=callback.from_user.username, full_name=callback.from_user.full_name)
     with models.SessionLocal() as db:
         promos = db.query(models.PromoCode).order_by(models.PromoCode.created_at.desc()).all()
         if not promos:
@@ -1173,12 +1122,14 @@ async def admin_list_promos(callback: types.CallbackQuery, bot: Bot):
 @dp.callback_query(lambda c: c.data == "admin_balance_manage")
 async def admin_balance_manage_menu(callback: types.CallbackQuery, bot: Bot):
     if not is_admin(callback.from_user.id): return
+    await log_action(bot, callback.from_user.id, "admin_balance_manage", "Открыл меню управления балансами", username=callback.from_user.username, full_name=callback.from_user.full_name)
     await callback.message.edit_text("💰 Управление балансами:", reply_markup=kb.admin_balance_manage_keyboard())
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "admin_add_balance")
 async def admin_add_balance_start(callback: types.CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id): return
+    await log_action(bot, callback.from_user.id, "admin_add_balance", "Начало добавления баланса", username=callback.from_user.username, full_name=callback.from_user.full_name)
     await callback.message.edit_text("➕ Введите Telegram ID и сумму через пробел (например, 123456789 10.5):")
     await state.set_state(ManageBalance.user_id)
     await state.update_data(action="add")
@@ -1187,6 +1138,7 @@ async def admin_add_balance_start(callback: types.CallbackQuery, state: FSMConte
 @dp.callback_query(lambda c: c.data == "admin_remove_balance")
 async def admin_remove_balance_start(callback: types.CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id): return
+    await log_action(bot, callback.from_user.id, "admin_remove_balance", "Начало списания баланса", username=callback.from_user.username, full_name=callback.from_user.full_name)
     await callback.message.edit_text("➖ Введите Telegram ID и сумму через пробел (например, 123456789 5):")
     await state.set_state(ManageBalance.user_id)
     await state.update_data(action="remove")
@@ -1209,7 +1161,7 @@ async def manage_balance_user_id(message: types.Message, state: FSMContext, bot:
                 user.balance += amount
                 db.commit()
                 add_transaction(db, user.id, amount, "deposit", description=f"Администратор")
-                await log_action(bot, message.from_user.id, "admin_add_balance", f"+{amount} {CRYPTO_CURRENCY} пользователю {user_id}")
+                await log_action(bot, message.from_user.id, "admin_add_balance", f"+{amount} {CRYPTO_CURRENCY} пользователю {user_id}", username=message.from_user.username, full_name=message.from_user.full_name)
                 await message.answer(f"✅ Добавлено {amount} {CRYPTO_CURRENCY}. Баланс: {user.balance:.2f} {CRYPTO_CURRENCY}")
             else:
                 if user.balance < amount:
@@ -1218,7 +1170,7 @@ async def manage_balance_user_id(message: types.Message, state: FSMContext, bot:
                 user.balance -= amount
                 db.commit()
                 add_transaction(db, user.id, -amount, "withdrawal", description=f"Администратор")
-                await log_action(bot, message.from_user.id, "admin_remove_balance", f"-{amount} {CRYPTO_CURRENCY} у пользователя {user_id}")
+                await log_action(bot, message.from_user.id, "admin_remove_balance", f"-{amount} {CRYPTO_CURRENCY} у пользователя {user_id}", username=message.from_user.username, full_name=message.from_user.full_name)
                 await message.answer(f"✅ Списано {amount} {CRYPTO_CURRENCY}. Баланс: {user.balance:.2f} {CRYPTO_CURRENCY}")
         await state.clear()
     except:
@@ -1229,6 +1181,7 @@ async def manage_balance_user_id(message: types.Message, state: FSMContext, bot:
 @dp.callback_query(lambda c: c.data == "admin_ban")
 async def admin_ban_start(callback: types.CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id): return
+    await log_action(bot, callback.from_user.id, "admin_ban", "Начало бана пользователя", username=callback.from_user.username, full_name=callback.from_user.full_name)
     await callback.message.edit_text("🔨 Введите Telegram ID пользователя:")
     await state.set_state(BanUser.user_id)
     await callback.answer()
@@ -1264,7 +1217,7 @@ async def admin_ban_action(message: types.Message, state: FSMContext, bot: Bot):
                 user = db.query(models.User).filter_by(tg_id=target_id).first()
                 user.is_banned = True
                 db.commit()
-                await log_action(bot, message.from_user.id, "admin_ban", f"Забанен {target_id}")
+                await log_action(bot, message.from_user.id, "admin_ban", f"Забанен {target_id}", username=message.from_user.username, full_name=message.from_user.full_name)
                 await message.answer(f"✅ Пользователь {target_id} забанен")
                 try:
                     await bot.send_message(target_id, "🚫 Вы забанены")
@@ -1277,7 +1230,7 @@ async def admin_ban_action(message: types.Message, state: FSMContext, bot: Bot):
                 user = db.query(models.User).filter_by(tg_id=target_id).first()
                 user.is_banned = False
                 db.commit()
-                await log_action(bot, message.from_user.id, "admin_unban", f"Разбанен {target_id}")
+                await log_action(bot, message.from_user.id, "admin_unban", f"Разбанен {target_id}", username=message.from_user.username, full_name=message.from_user.full_name)
                 await message.answer(f"✅ Пользователь {target_id} разбанен")
                 try:
                     await bot.send_message(target_id, "✅ Вы разбанены")
@@ -1288,6 +1241,7 @@ async def admin_ban_action(message: types.Message, state: FSMContext, bot: Bot):
 @dp.callback_query(lambda c: c.data == "admin_broadcast")
 async def admin_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id): return
+    await log_action(bot, callback.from_user.id, "admin_broadcast", "Начало рассылки", username=callback.from_user.username, full_name=callback.from_user.full_name)
     await callback.message.edit_text("📢 Введите текст для рассылки (можно HTML):")
     await state.set_state(Broadcast.text)
     await callback.answer()
@@ -1307,13 +1261,14 @@ async def admin_broadcast_send(message: types.Message, state: FSMContext, bot: B
         except:
             failed += 1
     await message.answer(f"✅ Рассылка завершена.\n📨 Отправлено: {sent}\n❌ Ошибок: {failed}")
-    await log_action(bot, message.from_user.id, "admin_broadcast", f"Рассылка: {sent} успешно, {failed} ошибок")
+    await log_action(bot, message.from_user.id, "admin_broadcast", f"Рассылка: {sent} успешно, {failed} ошибок", username=message.from_user.username, full_name=message.from_user.full_name)
     await state.clear()
 
 # ------------------ Экспорт/импорт данных ------------------
 @dp.callback_query(lambda c: c.data == "admin_export_data")
 async def admin_export_data(callback: types.CallbackQuery, bot: Bot):
     if not is_admin(callback.from_user.id): return
+    await log_action(bot, callback.from_user.id, "admin_export_data", "Экспорт данных", username=callback.from_user.username, full_name=callback.from_user.full_name)
     await callback.message.edit_text("⏳ Экспорт данных...")
     with models.SessionLocal() as db:
         users = db.query(models.User).all()
@@ -1354,6 +1309,7 @@ async def admin_export_data(callback: types.CallbackQuery, bot: Bot):
 @dp.callback_query(lambda c: c.data == "admin_import_data")
 async def admin_import_data_start(callback: types.CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id): return
+    await log_action(bot, callback.from_user.id, "admin_import_data", "Импорт данных", username=callback.from_user.username, full_name=callback.from_user.full_name)
     await callback.message.edit_text("📥 Отправьте JSON-файл с бэкапом:")
     await state.set_state(ImportData.file)
     await callback.answer()
@@ -1387,14 +1343,14 @@ async def admin_import_data_file(message: types.Message, state: FSMContext, bot:
             sess = models.Session(**sess_data)
             db.add(sess)
         db.commit()
-        await log_action(bot, message.from_user.id, "import_data", "Импорт данных")
+        await log_action(bot, message.from_user.id, "import_data", "Импорт данных", username=message.from_user.username, full_name=message.from_user.full_name)
         await message.answer("✅ Данные импортированы", reply_markup=kb.admin_menu_keyboard())
     await state.clear()
 
 # ------------------ VK Спаммер ------------------
 @dp.callback_query(lambda c: c.data == "vk_spammer_menu")
 async def vk_spammer_menu(callback: types.CallbackQuery, bot: Bot):
-    await log_action(bot, callback.from_user.id, "vk_spammer_menu", "Открыл меню VK спаммера")
+    await log_action(bot, callback.from_user.id, "vk_spammer_menu", "Открыл меню VK спаммера", username=callback.from_user.username, full_name=callback.from_user.full_name)
     if not await check_vk_subscription(callback.from_user.id):
         await callback.message.edit_text("❌ У вас нет активной подписки на VK Спаммер.\n\n💰 Выберите подписку через /buy_spammer", parse_mode="HTML")
         await callback.answer()
@@ -1417,6 +1373,7 @@ async def buy_spammer_choose(callback: types.CallbackQuery, bot: Bot):
     months = int(callback.data.split("_")[-1])
     price = {1: 10, 3: 25, 6: 45}[months]
     user_id = callback.from_user.id
+    await log_action(bot, user_id, "buy_spammer_choose", f"Выбор подписки на {months} мес.", username=callback.from_user.username, full_name=callback.from_user.full_name)
     with models.SessionLocal() as db:
         user = db.query(models.User).filter_by(tg_id=user_id).first()
         if not user:
@@ -1442,6 +1399,7 @@ async def buy_spammer_choose(callback: types.CallbackQuery, bot: Bot):
 
 @dp.callback_query(lambda c: c.data == "vk_add_account")
 async def vk_add_account_start(callback: types.CallbackQuery, state: FSMContext):
+    await log_action(bot, callback.from_user.id, "vk_add_account", "Добавление VK аккаунта", username=callback.from_user.username, full_name=callback.from_user.full_name)
     if not await check_vk_subscription(callback.from_user.id):
         await callback.answer("Нет активной подписки", show_alert=True)
         return
@@ -1452,6 +1410,8 @@ async def vk_add_account_start(callback: types.CallbackQuery, state: FSMContext)
 @dp.message(VKAddAccount.token)
 async def vk_add_account_token(message: types.Message, state: FSMContext, bot: Bot):
     token = message.text.strip()
+    user_id = message.from_user.id
+    await log_action(bot, user_id, "vk_add_account_token", "Проверка токена VK", username=message.from_user.username, full_name=message.from_user.full_name)
     try:
         client = VKClient(token)
         user_info = await client.get_user_info()
@@ -1465,7 +1425,6 @@ async def vk_add_account_token(message: types.Message, state: FSMContext, bot: B
         await message.answer(f"❌ Ошибка авторизации: {e}\nПроверьте токен.")
         await state.clear()
         return
-    user_id = message.from_user.id
     with models.SessionLocal() as db:
         user = db.query(models.User).filter_by(tg_id=user_id).first()
         db.query(models.VKAccount).filter_by(user_id=user.id).delete()
@@ -1480,7 +1439,6 @@ async def vk_add_account_token(message: types.Message, state: FSMContext, bot: B
             subscription_expires=datetime.utcnow() + timedelta(days=30)
         )
         db.add(account); db.commit()
-        await log_action(bot, user_id, "vk_add_account", f"Добавлен аккаунт VK ID {vk_user['id']}")
         await message.answer(
             f"✅ Аккаунт VK добавлен!\n\n"
             f"👤 {vk_user['first_name']} {vk_user['last_name']} (ID {vk_user['id']})\n"
@@ -1494,6 +1452,7 @@ async def vk_add_account_token(message: types.Message, state: FSMContext, bot: B
 
 @dp.callback_query(lambda c: c.data == "vk_my_accounts")
 async def vk_my_accounts(callback: types.CallbackQuery, bot: Bot):
+    await log_action(bot, callback.from_user.id, "vk_my_accounts", "Просмотр своих VK аккаунтов", username=callback.from_user.username, full_name=callback.from_user.full_name)
     if not await check_vk_subscription(callback.from_user.id):
         await callback.answer("Нет подписки", show_alert=True); return
     user_id = callback.from_user.id
@@ -1508,6 +1467,7 @@ async def vk_my_accounts(callback: types.CallbackQuery, bot: Bot):
 
 @dp.callback_query(lambda c: c.data == "vk_templates")
 async def vk_templates_menu(callback: types.CallbackQuery, bot: Bot):
+    await log_action(bot, callback.from_user.id, "vk_templates", "Просмотр шаблонов VK", username=callback.from_user.username, full_name=callback.from_user.full_name)
     if not await check_vk_subscription(callback.from_user.id):
         await callback.answer("Нет подписки", show_alert=True); return
     user_id = callback.from_user.id
@@ -1522,6 +1482,7 @@ async def vk_templates_menu(callback: types.CallbackQuery, bot: Bot):
 
 @dp.callback_query(lambda c: c.data == "vk_add_template")
 async def vk_add_template_start(callback: types.CallbackQuery, state: FSMContext):
+    await log_action(bot, callback.from_user.id, "vk_add_template", "Добавление шаблона VK", username=callback.from_user.username, full_name=callback.from_user.full_name)
     if not await check_vk_subscription(callback.from_user.id):
         await callback.answer("Нет подписки", show_alert=True); return
     await callback.message.edit_text("📝 Введите название шаблона:")
@@ -1540,11 +1501,11 @@ async def vk_add_template_text(message: types.Message, state: FSMContext, bot: B
     data = await state.get_data()
     name = data['name']
     user_id = message.from_user.id
+    await log_action(bot, user_id, "vk_add_template_text", f"Шаблон '{name}'", username=message.from_user.username, full_name=message.from_user.full_name)
     with models.SessionLocal() as db:
         user = db.query(models.User).filter_by(tg_id=user_id).first()
         template = models.VKMessageTemplate(user_id=user.id, name=name, text=text)
         db.add(template); db.commit()
-        await log_action(bot, user_id, "vk_add_template", f"Шаблон '{name}'")
         await message.answer(f"✅ Шаблон «{name}» сохранён.", reply_markup=kb.vk_spammer_menu_keyboard())
     await state.clear()
 
@@ -1552,6 +1513,7 @@ async def vk_add_template_text(message: types.Message, state: FSMContext, bot: B
 async def vk_use_template(callback: types.CallbackQuery, state: FSMContext):
     template_id = int(callback.data.split("_")[-1])
     user_id = callback.from_user.id
+    await log_action(bot, user_id, "vk_use_template", f"Выбор шаблона ID {template_id}", username=callback.from_user.username, full_name=callback.from_user.full_name)
     with models.SessionLocal() as db:
         user = db.query(models.User).filter_by(tg_id=user_id).first()
         template = db.query(models.VKMessageTemplate).filter_by(id=template_id, user_id=user.id).first()
@@ -1592,6 +1554,7 @@ async def vk_spam_interval(message: types.Message, state: FSMContext, bot: Bot):
         template_id = data['template_id']
         recipients_type = data['recipients_type']
         user_id = message.from_user.id
+        await log_action(bot, user_id, "vk_spam_interval", f"Создание задачи спама", username=message.from_user.username, full_name=message.from_user.full_name)
         with models.SessionLocal() as db:
             user = db.query(models.User).filter_by(tg_id=user_id).first()
             account = db.query(models.VKAccount).filter_by(id=account_id, user_id=user.id).first()
@@ -1616,7 +1579,7 @@ async def vk_spam_interval(message: types.Message, state: FSMContext, bot: Bot):
                 await message.answer("❌ Рассылка по подписчикам временно недоступна.")
                 await state.clear()
                 return
-            else:
+            else:  # /list
                 await message.answer("Введите список ID получателей через запятую (например, 123,456,789):")
                 await state.set_state("vk_spam_list")
                 return
@@ -1629,7 +1592,6 @@ async def vk_spam_interval(message: types.Message, state: FSMContext, bot: Bot):
                 status="pending"
             )
             db.add(task); db.commit()
-            await log_action(bot, user_id, "vk_create_spam_task", f"Задача #{task.id}")
             await message.answer(f"✅ Задача на рассылку создана (ID {task.id}).\nСтатус: {task.status}\nДля запуска используйте /vk_start_task {task.id}")
         await state.clear()
     except Exception as e:
