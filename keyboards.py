@@ -16,7 +16,7 @@ def balance_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💸 Пополнить баланс", callback_data="deposit_balance")],
         [InlineKeyboardButton(text="🎟 Активировать промокод", callback_data="activate_promo")],
-        [InlineKeyboardButton(text="💸 Вывести бонусный баланс", callback_data="withdraw_balance")],
+        [InlineKeyboardButton(text="💸 Вывести средства", callback_data="withdraw_balance")],
         [InlineKeyboardButton(text="🔙 Главное меню", callback_data="main_menu")]
     ])
 
@@ -28,9 +28,12 @@ def catalog_keyboard(products, page=0):
     for p in page_products:
         buttons.append([InlineKeyboardButton(text=f"{p.name} — {p.price} {p.currency}", callback_data=f"view_product_{p.id}")])
     nav = []
-    if page > 0: nav.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"catalog_page_{page-1}"))
-    if end < len(products): nav.append(InlineKeyboardButton(text="Вперед ▶️", callback_data=f"catalog_page_{page+1}"))
-    if nav: buttons.append(nav)
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"catalog_page_{page-1}"))
+    if end < len(products):
+        nav.append(InlineKeyboardButton(text="Вперед ▶️", callback_data=f"catalog_page_{page+1}"))
+    if nav:
+        buttons.append(nav)
     buttons.append([InlineKeyboardButton(text="🔙 Главное меню", callback_data="main_menu")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -43,15 +46,19 @@ def sessions_keyboard(sessions, product_id, page=0):
     for s in page_sessions:
         buttons.append([InlineKeyboardButton(text=f"👥 {s.contacts_count} контактов", callback_data=f"buy_session_{s.id}")])
     nav = []
-    if page > 0: nav.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"sessions_page_{product_id}_{page-1}"))
-    if end < len(sessions): nav.append(InlineKeyboardButton(text="Вперед ▶️", callback_data=f"sessions_page_{product_id}_{page+1}"))
-    if nav: buttons.append(nav)
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"sessions_page_{product_id}_{page-1}"))
+    if end < len(sessions):
+        nav.append(InlineKeyboardButton(text="Вперед ▶️", callback_data=f"sessions_page_{product_id}_{page+1}"))
+    if nav:
+        buttons.append(nav)
     buttons.append([InlineKeyboardButton(text="🔙 Назад к товарам", callback_data="catalog")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def product_detail_keyboard(product_id, has_balance=False):
     buttons = []
-    if has_balance: buttons.append([InlineKeyboardButton(text="💳 Купить с баланса", callback_data=f"buy_with_balance_{product_id}")])
+    if has_balance:
+        buttons.append([InlineKeyboardButton(text="💳 Купить с баланса", callback_data=f"buy_with_balance_{product_id}")])
     buttons.append([InlineKeyboardButton(text="💸 Оплатить криптовалютой", callback_data=f"pay_{product_id}")])
     buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="catalog")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -81,7 +88,6 @@ def admin_menu_keyboard():
         [InlineKeyboardButton(text="📥 Импорт данных", callback_data="admin_import_data")],
         [InlineKeyboardButton(text="🎟 Выдать подписку VK", callback_data="admin_give_vk_subscription")],
         [InlineKeyboardButton(text="🔙 Главное меню", callback_data="main_menu")]
-        [InlineKeyboardButton(text="💸 Заявки на вывод", callback_data="admin_withdrawals")],
     ])
 
 def admin_promocodes_keyboard():
@@ -99,9 +105,12 @@ def admin_balance_manage_keyboard():
     ])
 
 def subscription_keyboard():
-    if not CHANNEL_ID: return None
-    if CHANNEL_ID.startswith('@'): url = f"https://t.me/{CHANNEL_ID[1:]}"
-    else: url = f"https://t.me/c/{str(CHANNEL_ID)[4:]}"
+    if not CHANNEL_ID:
+        return None
+    if CHANNEL_ID.startswith('@'):
+        url = f"https://t.me/{CHANNEL_ID[1:]}"
+    else:
+        url = f"https://t.me/c/{str(CHANNEL_ID)[4:]}"
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔗 Подписаться", url=url)],
         [InlineKeyboardButton(text="✅ Проверить подписку", callback_data="verify_sub")]
@@ -140,12 +149,3 @@ def vk_tasks_keyboard(tasks):
         buttons.append([InlineKeyboardButton(text=f"{emoji} Задача #{t.id} – {t.status}", callback_data=f"vk_task_{t.id}")])
     buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="vk_spammer_menu")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-def buy_spammer_keyboard():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="1 неделя - 5 USDT", callback_data="buy_spammer_1")],
-        [InlineKeyboardButton(text="1 месяц - 10 USDT", callback_data="buy_spammer_1")],
-        [InlineKeyboardButton(text="3 месяца - 25 USDT", callback_data="buy_spammer_3")],
-        [InlineKeyboardButton(text="6 месяцев - 45 USDT", callback_data="buy_spammer_6")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")]
-    ])
