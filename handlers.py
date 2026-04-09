@@ -11,8 +11,7 @@ import html
 import keyboards as kb
 import models
 import crypto_api
-from vk_api import VKClient
-from config import ADMIN_IDS, CRYPTO_CURRENCY, CHANNEL_ID, PRODUCTS_PER_PAGE, SPAMMER_SUBSCRIPTION_PRICE
+from config import ADMIN_IDS, CRYPTO_CURRENCY, CHANNEL_ID, PRODUCTS_PER_PAGE
 from log_utils import log_action
 
 dp = Dispatcher()
@@ -31,9 +30,6 @@ class ManageBalance(StatesGroup): user_id = State(); amount = State(); action = 
 class ImportData(StatesGroup): file = State()
 class ChangeProductPrice(StatesGroup): product_id = State(); new_price = State()
 class WithdrawBalance(StatesGroup): amount = State(); wallet = State()
-class VKAddAccount(StatesGroup): token = State()
-class VKAddTemplate(StatesGroup): name = State(); text = State()
-class VKStartSpam(StatesGroup): account_id = State(); template_id = State(); recipients_type = State(); interval = State()
 
 # ------------------ Helper ------------------
 def is_admin(user_id: int) -> bool:
@@ -50,16 +46,6 @@ async def is_subscribed(user_id: int, bot: Bot) -> bool:
         member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         return member.status in ["member", "administrator", "creator"]
     except: return False
-
-async def check_vk_subscription(user_id: int) -> bool:
-    with models.SessionLocal() as db:
-        account = db.query(models.VKAccount).filter_by(user_id=user_id, is_active=True).first()
-        if not account: return False
-        if account.subscription_expires and account.subscription_expires < datetime.utcnow():
-            account.is_active = False
-            db.commit()
-            return False
-        return True
 
 # ------------------ /start ------------------
 @dp.message(Command("start"))
@@ -519,7 +505,7 @@ async def my_referrals(callback: types.CallbackQuery, bot: Bot):
         await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb.main_menu_keyboard())
     await callback.answer()
 
-# ------------------ Поддержка (исправлено, без HTML-парсинга) ------------------
+# ------------------ Поддержка (без HTML-парсинга) ------------------
 @dp.callback_query(lambda c: c.data == "support")
 async def support_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text("💬 Напишите ваше сообщение администратору.\n\nЧтобы отменить, нажмите /cancel")
@@ -537,7 +523,7 @@ async def support_send(message: types.Message, state: FSMContext, bot: Bot):
         await message.answer("❌ Отменено.")
         await state.clear()
         return
-    # Экранируем текст для HTML, чтобы избежать ошибок парсинга
+    # Экранируем текст для HTML
     safe_text = html.escape(text)
     for admin_id in ADMIN_IDS:
         try:
@@ -559,14 +545,13 @@ async def admin_reply(message: types.Message, bot: Bot):
     try:
         user_id = int(parts[0].split('_')[1])
         reply_text = parts[2]
-        # Экранируем ответ, чтобы избежать ошибок HTML
         safe_reply = html.escape(reply_text)
         await bot.send_message(user_id, f"💬 <b>Ответ администратора:</b>\n{safe_reply}", parse_mode="HTML")
         await message.answer("✅ Ответ отправлен.")
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
 
-# ------------------ Админ-панель (простая, без ролей) ------------------
+# ------------------ Админ-панель ------------------
 @dp.message(Command("admin"))
 async def admin_cmd(message: types.Message, bot: Bot):
     if not is_admin(message.from_user.id):
@@ -1192,102 +1177,6 @@ async def admin_import_data_file(message: types.Message, state: FSMContext, bot:
         await log_action(bot, message.from_user.id, "import_data", "Импорт данных")
         await message.answer("✅ Данные импортированы", reply_markup=kb.admin_menu_keyboard())
     await state.clear()
-
-# ------------------ VK Спаммер (только основные функции) ------------------
-@dp.callback_query(lambda c: c.data == "vk_spammer_menu")
-async def vk_spammer_menu(callback: types.CallbackQuery, bot: Bot):
-    if not await check_vk_subscription(callback.from_user.id):
-        await callback.message.edit_text(f"❌ У вас нет активной подписки на VK Спаммер.\n\n💰 Стоимость подписки: {SPAMMER_SUBSCRIPTION_PRICE} {CRYPTO_CURRENCY}\n👉 Нажмите /buy_spammer, чтобы оплатить.", parse_mode="HTML")
-        await callback.answer()
-        return
-    await callback.message.edit_text("📨 <b>VK Спаммер</b>\n\nВыберите действие:", parse_mode="HTML", reply_markup=kb.vk_spammer_menu_keyboard())
-    await callback.answer()
-
-@dp.message(Command("buy_spammer"))
-async def buy_spammer(message: types.Message, bot: Bot):
-    user_id = message.from_user.id
-    with models.SessionLocal() as db:
-        user = db.query(models.User).filter_by(tg_id=user_id).first()
-        if not user:
-            await message.answer("❌ Сначала /start")
-            return
-        if user.balance >= SPAMMER_SUBSCRIPTION_PRICE:
-            user.balance -= SPAMMER_SUBSCRIPTION_PRICE
-            expires = datetime.utcnow() + timedelta(days=30)
-            account = db.query(models.VKAccount).filter_by(user_id=user.id).first()
-            if account:
-                account.subscription_expires = expires
-                account.is_active = True
-            else:
-                account = models.VKAccount(user_id=user.id, access_token="", vk_user_id=0, subscription_expires=expires, is_active=True)
-                db.add(account)
-            db.commit()
-            add_transaction(db, user.id, -SPAMMER_SUBSCRIPTION_PRICE, "purchase", description="Подписка VK Спаммер")
-            await message.answer(f"✅ Подписка активирована до {expires.strftime('%d.%m.%Y')}.\nТеперь добавьте аккаунт VK через меню.")
-        else:
-            try:
-                inv_id, pay_url = await crypto_api.create_invoice(SPAMMER_SUBSCRIPTION_PRICE, CRYPTO_CURRENCY)
-                invoice = models.Invoice(user_id=user.id, crypto_invoice_id=inv_id, amount=SPAMMER_SUBSCRIPTION_PRICE,
-                                         currency=CRYPTO_CURRENCY, status="active", is_deposit=False)
-                db.add(invoice); db.commit()
-                await message.answer(f"💸 Счёт на {SPAMMER_SUBSCRIPTION_PRICE} {CRYPTO_CURRENCY} создан.\nОплатите и нажмите «Проверить оплату».", reply_markup=kb.invoice_keyboard(pay_url, invoice.id))
-            except Exception as e:
-                await message.answer(f"Ошибка: {e}")
-
-@dp.callback_query(lambda c: c.data == "vk_add_account")
-async def vk_add_account_start(callback: types.CallbackQuery, state: FSMContext):
-    if not await check_vk_subscription(callback.from_user.id):
-        await callback.answer("Нет активной подписки", show_alert=True)
-        return
-    await callback.message.edit_text("🔑 Введите токен доступа VK (можно получить в настройках приложения VK):")
-    await state.set_state(VKAddAccount.token)
-    await callback.answer()
-
-@dp.message(VKAddAccount.token)
-async def vk_add_account_token(message: types.Message, state: FSMContext, bot: Bot):
-    token = message.text.strip()
-    try:
-        client = VKClient(token)
-        user_info = await client.get_user_info()
-        if not user_info:
-            raise Exception("Не удалось получить данные")
-        vk_user = user_info[0]
-        friends = await client.get_friends_count()
-        groups = await client.get_groups_count()
-        followers = await client.get_followers_count()
-    except Exception as e:
-        await message.answer(f"❌ Ошибка авторизации: {e}\nПроверьте токен.")
-        await state.clear()
-        return
-    user_id = message.from_user.id
-    with models.SessionLocal() as db:
-        user = db.query(models.User).filter_by(tg_id=user_id).first()
-        db.query(models.VKAccount).filter_by(user_id=user.id).delete()
-        account = models.VKAccount(
-            user_id=user.id,
-            access_token=token,
-            vk_user_id=vk_user['id'],
-            vk_username=f"{vk_user['first_name']} {vk_user['last_name']}",
-            friends_count=friends,
-            groups_count=groups,
-            followers_count=followers,
-            subscription_expires=datetime.utcnow() + timedelta(days=30)
-        )
-        db.add(account); db.commit()
-        await log_action(bot, user_id, "vk_add_account", f"Добавлен аккаунт VK ID {vk_user['id']}")
-        await message.answer(
-            f"✅ Аккаунт VK добавлен!\n\n"
-            f"👤 {vk_user['first_name']} {vk_user['last_name']} (ID {vk_user['id']})\n"
-            f"👥 Друзей: {friends}\n"
-            f"📢 Групп: {groups}\n"
-            f"📸 Подписчиков: {followers}\n\n"
-            f"Теперь вы можете создавать шаблоны и запускать рассылку.",
-            reply_markup=kb.vk_spammer_menu_keyboard()
-        )
-    await state.clear()
-
-# ------------------ Остальные обработчики VK спаммера (шаблоны, задачи) опущены для краткости, но их можно добавить аналогично ------------------
-# Они не влияют на работу админ-панели и поддержки.
 
 # ------------------ Заявки на вывод (заглушка) ------------------
 @dp.callback_query(lambda c: c.data == "admin_withdrawals")
