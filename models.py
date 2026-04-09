@@ -21,8 +21,6 @@ class User(Base):
     total_referral_earnings = Column(Float, default=0.0)
     referral_count = Column(Integer, default=0)
     referred_by = Column(Integer, ForeignKey('users.tg_id'), nullable=True)
-    vk_spammer_subscription_expires = Column(DateTime, nullable=True)
-
     purchases = relationship("Purchase", back_populates="user")
     invoices = relationship("Invoice", back_populates="user")
     logs = relationship("Log", back_populates="user")
@@ -30,7 +28,7 @@ class User(Base):
     vk_accounts = relationship("VKAccount", back_populates="user")
     vk_templates = relationship("VKMessageTemplate", back_populates="user")
     vk_spam_tasks = relationship("VKSpamTask", back_populates="user")
-    withdrawal_requests = relationship("WithdrawalRequest", back_populates="user")
+    admin_roles = relationship("AdminUser", back_populates="user")
 
 class Product(Base):
     __tablename__ = 'products'
@@ -125,7 +123,7 @@ class Transaction(Base):
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     amount = Column(Float, nullable=False)
     currency = Column(String, default="USDT")
-    type = Column(String, nullable=False)
+    type = Column(String, nullable=False)  # deposit, purchase, bonus, withdrawal
     description = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     user = relationship("User", back_populates="transactions")
@@ -173,37 +171,56 @@ class VKSpamTask(Base):
     user = relationship("User", back_populates="vk_spam_tasks")
     vk_account = relationship("VKAccount", back_populates="spam_tasks")
     template = relationship("VKMessageTemplate", back_populates="tasks")
+    logs = relationship("VKSpamLog", back_populates="task")
 
 class VKSpamLog(Base):
     __tablename__ = 'vk_spam_logs'
     id = Column(Integer, primary_key=True)
     task_id = Column(Integer, ForeignKey('vk_spam_tasks.id'), nullable=False)
     recipient_id = Column(Integer, nullable=False)
-    status = Column(String, nullable=False)
+    status = Column(String, nullable=False)  # sent, failed
     error = Column(String, nullable=True)
     sent_at = Column(DateTime, default=datetime.utcnow)
-    task = relationship("VKSpamTask")
+    task = relationship("VKSpamTask", back_populates="logs")
 
-class WithdrawalRequest(Base):
-    __tablename__ = 'withdrawal_requests'
-    __table_args__ = {'extend_existing': True}
+class AdminRole(Base):
+    __tablename__ = 'admin_roles'
+    id = Column(Integer, primary_key=True)
+    name = Column(String, unique=True, nullable=False)
+    permissions = Column(Text, nullable=False)  # JSON список разрешений
+    users = relationship("AdminUser", back_populates="role")
+
+class AdminUser(Base):
+    __tablename__ = 'admin_users'
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
-    amount = Column(Float, nullable=False)
-    wallet = Column(String, nullable=False)
-    status = Column(String, default='pending')
-    created_at = Column(DateTime, default=datetime.utcnow)
-    processed_at = Column(DateTime, nullable=True)
-    user = relationship("User", back_populates="withdrawal_requests")
+    role_id = Column(Integer, ForeignKey('admin_roles.id'), nullable=False)
+    user = relationship("User", back_populates="admin_roles")
+    role = relationship("AdminRole", back_populates="users")
 
 def init_db():
     Base.metadata.create_all(engine)
     with SessionLocal() as db:
+        # Создаём супер-админов из ADMIN_IDS
         for admin_id in ADMIN_IDS:
             user = db.query(User).filter_by(tg_id=admin_id).first()
             if not user:
                 user = User(tg_id=admin_id, is_admin=True, balance=0.0)
                 db.add(user)
+                db.flush()
             else:
                 user.is_admin = True
-        db.commit()
+        # Создаём роли, если их нет
+        if not db.query(AdminRole).first():
+            super_role = AdminRole(name="super_admin", permissions='["all"]')
+            moderator_role = AdminRole(name="moderator", permissions='["stats","logs","products"]')
+            db.add_all([super_role, moderator_role])
+            db.commit()
+            # Назначаем супер-админам роль super_admin
+            for admin_id in ADMIN_IDS:
+                user = db.query(User).filter_by(tg_id=admin_id).first()
+                if user:
+                    role = db.query(AdminRole).filter_by(name="super_admin").first()
+                    if role and not db.query(AdminUser).filter_by(user_id=user.id).first():
+                        db.add(AdminUser(user_id=user.id, role_id=role.id))
+            db.commit()
