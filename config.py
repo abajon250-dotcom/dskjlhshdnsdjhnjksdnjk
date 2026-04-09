@@ -12,7 +12,7 @@ if not CRYPTOBOT_TOKEN: raise ValueError("CRYPTOBOT_TOKEN не задан")
 CRYPTO_CURRENCY = os.getenv("CRYPTO_CURRENCY", "USDT")
 ADMIN_LOG_CHAT_IDS = [int(x.strip()) for x in os.getenv("ADMIN_LOG_CHAT_IDS", "").split(",") if x.strip()]
 CHANNEL_ID = os.getenv("CHANNEL_ID", "")
-PRODUCTS_PER_PAGE = 5   # <--- добавлено
+PRODUCTS_PER_PAGE = 5
 
-# Если вы не используете VK спаммер, эта переменная не обязательна, но пусть будет
+# Стоимость подписки на VK спаммер (в USDT)
 SPAMMER_SUBSCRIPTION_PRICE = float(os.getenv("SPAMMER_SUBSCRIPTION_PRICE", "10"))
