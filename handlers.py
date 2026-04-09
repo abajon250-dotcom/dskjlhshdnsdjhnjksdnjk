@@ -580,7 +580,8 @@ async def support_send(message: types.Message, state: FSMContext, bot: Bot):
     safe_text = html.escape(text)
     for admin_id in ADMIN_IDS:
         try:
-            await bot.send_message(admin_id, f"📩 <b>Новое сообщение от пользователя</b>\n👤 {full_name} (@{username})\n💬 {safe_text}\n\nЧтобы ответить, используйте:\n/reply_{user_id} <текст>", parse_mode="HTML")
+            await bot.send_message(admin_id,
+        f"📩 Новое сообщение от пользователя\n👤 {user_id}\n💬 {safe_text}\n\nЧтобы ответить, используйте:\n/reply_{user_id} <текст>")
         except Exception as e:
             print(f"Ошибка отправки админу {admin_id}: {e}")
     await message.answer("✅ Сообщение отправлено администратору. Ожидайте ответа.")
