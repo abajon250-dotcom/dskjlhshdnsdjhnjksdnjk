@@ -268,21 +268,87 @@ async def withdraw_wallet(message: types.Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     amount = data['amount']
     user_id = message.from_user.id
-    await log_action(bot, user_id, "withdraw_wallet", f"Сумма {amount} {CRYPTO_CURRENCY}, кошелёк {wallet}")
+    await log_action(bot, user_id, "withdraw_wallet", f"Сумма {amount} {CRYPTO_CURRENCY}, кошелёк {wallet}", username=message.from_user.username, full_name=message.from_user.full_name)
     with models.SessionLocal() as db:
         user = db.query(models.User).filter_by(tg_id=user_id).first()
-        if user.balance < amount:
-            await message.answer("❌ Ошибка: недостаточно средств.")
+        if not user:
+            await message.answer("❌ Пользователь не найден.")
             await state.clear()
             return
-        user.balance -= amount
-        add_transaction(db, user.id, -amount, "withdrawal", description=f"Вывод на кошелёк {wallet}")
+        if user.balance < amount:
+            await message.answer(f"❌ Недостаточно средств. Доступно: {user.balance:.2f} {CRYPTO_CURRENCY}")
+            await state.clear()
+            return
+        # Создаём заявку (баланс пока не списываем)
+        request = models.WithdrawalRequest(user_id=user.id, amount=amount, wallet=wallet, status='pending')
+        db.add(request)
         db.commit()
+        # Уведомляем администраторов
         for admin_id in ADMIN_IDS:
-            await bot.send_message(admin_id, f"💸 <b>Заявка на вывод</b>\n👤 {user_id}\n💰 Сумма: {amount} {CRYPTO_CURRENCY}\n💳 Кошелёк: {wallet}")
-        await message.answer(f"✅ Заявка на вывод {amount} {CRYPTO_CURRENCY} отправлена администраторам. Деньги будут переведены в ближайшее время.")
+            await bot.send_message(admin_id, f"💸 <b>Новая заявка на вывод</b>\n👤 {user_id}\n💰 Сумма: {amount} {CRYPTO_CURRENCY}\n💳 Кошелёк: {wallet}\n\nИспользуйте /withdraw_approve {request.id} для одобрения\n/withdraw_reject {request.id} для отклонения")
+        await message.answer(f"✅ Заявка на вывод {amount} {CRYPTO_CURRENCY} создана и отправлена администраторам. Ожидайте подтверждения.")
     await state.clear()
 
+@dp.message(Command("withdraw_approve"))
+async def withdraw_approve(message: types.Message, bot: Bot):
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Нет прав.")
+        return
+    parts = message.text.split()
+    if len(parts) < 2:
+        await message.answer("❌ Используйте: /withdraw_approve <id_заявки>")
+        return
+    try:
+        req_id = int(parts[1])
+        with models.SessionLocal() as db:
+            req = db.query(models.WithdrawalRequest).filter_by(id=req_id).first()
+            if not req or req.status != 'pending':
+                await message.answer("❌ Заявка не найдена или уже обработана.")
+                return
+            user = req.user
+            if user.balance < req.amount:
+                await message.answer(f"❌ Недостаточно средств на балансе пользователя. Доступно: {user.balance:.2f} {CRYPTO_CURRENCY}")
+                return
+            # Списание
+            user.balance -= req.amount
+            req.status = 'approved'
+            req.processed_at = datetime.utcnow()
+            db.commit()
+            add_transaction(db, user.id, -req.amount, "withdrawal", description=f"Вывод на кошелёк {req.wallet} (одобрено)")
+            await message.answer(f"✅ Заявка #{req_id} одобрена. Сумма {req.amount} {CRYPTO_CURRENCY} списана с баланса пользователя {user.tg_id}.")
+            try:
+                await bot.send_message(user.tg_id, f"✅ Ваша заявка на вывод {req.amount} {CRYPTO_CURRENCY} одобрена. Деньги будут отправлены в ближайшее время.")
+            except:
+                pass
+    except ValueError:
+        await message.answer("❌ Введите число.")
+
+@dp.message(Command("withdraw_reject"))
+async def withdraw_reject(message: types.Message, bot: Bot):
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Нет прав.")
+        return
+    parts = message.text.split()
+    if len(parts) < 2:
+        await message.answer("❌ Используйте: /withdraw_reject <id_заявки>")
+        return
+    try:
+        req_id = int(parts[1])
+        with models.SessionLocal() as db:
+            req = db.query(models.WithdrawalRequest).filter_by(id=req_id).first()
+            if not req or req.status != 'pending':
+                await message.answer("❌ Заявка не найдена или уже обработана.")
+                return
+            req.status = 'rejected'
+            req.processed_at = datetime.utcnow()
+            db.commit()
+            await message.answer(f"❌ Заявка #{req_id} отклонена.")
+            try:
+                await bot.send_message(req.user.tg_id, f"❌ Ваша заявка на вывод {req.amount} {CRYPTO_CURRENCY} отклонена. Средства остались на балансе.")
+            except:
+                pass
+    except ValueError:
+        await message.answer("❌ Введите число.")
 # ------------------ Каталог и пагинация ------------------
 @dp.callback_query(lambda c: c.data == "catalog")
 async def show_catalog(callback: types.CallbackQuery, bot: Bot):
@@ -592,19 +658,27 @@ async def admin_reply(message: types.Message, bot: Bot):
     if not is_admin(message.from_user.id):
         await message.answer("❌ Нет прав.")
         return
+    # Разделяем команду и аргументы
     parts = message.text.split(maxsplit=2)
     if len(parts) < 3:
         await message.answer("❌ Используйте: /reply_<user_id> <текст>")
         return
+    # Извлекаем user_id из первого аргумента (например, reply_123456789)
     try:
-        user_id = int(parts[0].split('_')[1])
+        user_id = int(parts[1].split('_')[1]) if '_' in parts[1] else int(parts[1])
         reply_text = parts[2]
-        await log_action(bot, message.from_user.id, "admin_reply", f"Ответ пользователю {user_id}: {reply_text[:100]}")
-        safe_reply = html.escape(reply_text)
+    except (IndexError, ValueError):
+        await message.answer("❌ Неверный формат. Используйте: /reply_<user_id> <текст>")
+        return
+    # Логируем действие
+    await log_action(bot, message.from_user.id, "admin_reply", f"Ответ пользователю {user_id}: {reply_text[:100]}", username=message.from_user.username, full_name=message.from_user.full_name)
+    # Экранируем текст ответа
+    safe_reply = html.escape(reply_text)
+    try:
         await bot.send_message(user_id, f"💬 <b>Ответ администратора:</b>\n{safe_reply}", parse_mode="HTML")
         await message.answer("✅ Ответ отправлен.")
     except Exception as e:
-        await message.answer(f"❌ Ошибка: {e}")
+        await message.answer(f"❌ Ошибка при отправке: {e}")
 # ------------------ Админ-панель ------------------
 @dp.message(Command("admin"))
 async def admin_cmd(message: types.Message, bot: Bot):
@@ -665,17 +739,15 @@ async def admin_withdrawals(callback: types.CallbackQuery, bot: Bot):
     if not is_admin(callback.from_user.id):
         await callback.answer("Нет прав", show_alert=True)
         return
-    await log_action(bot, callback.from_user.id, "admin_withdrawals", "Просмотр заявок на вывод")
     with models.SessionLocal() as db:
-        withdrawals = db.query(models.Transaction).filter_by(type="withdrawal").order_by(models.Transaction.created_at.desc()).limit(20).all()
-        if not withdrawals:
-            await callback.message.edit_text("📭 Заявок на вывод нет.", reply_markup=kb.admin_menu_keyboard())
+        requests = db.query(models.WithdrawalRequest).filter_by(status='pending').order_by(models.WithdrawalRequest.created_at.desc()).all()
+        if not requests:
+            await callback.message.edit_text("📭 Нет активных заявок на вывод.", reply_markup=kb.admin_menu_keyboard())
             return
-        text = "💸 <b>Заявки на вывод (последние 20):</b>\n\n"
-        for w in withdrawals:
-            user = w.user
-            text += f"🕒 {w.created_at.strftime('%d.%m.%Y %H:%M')} | Пользователь {user.tg_id} | Сумма {w.amount} {w.currency}\n"
-            if w.description: text += f"   📝 {w.description}\n"
+        text = "💸 <b>Заявки на вывод (ожидают обработки):</b>\n\n"
+        for r in requests:
+            user = r.user
+            text += f"🆔 #{r.id} | Пользователь {user.tg_id} | Сумма {r.amount} {CRYPTO_CURRENCY} | Кошелёк: {r.wallet}\n"
         await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb.admin_menu_keyboard())
     await callback.answer()
 

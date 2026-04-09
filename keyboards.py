@@ -81,6 +81,7 @@ def admin_menu_keyboard():
         [InlineKeyboardButton(text="📥 Импорт данных", callback_data="admin_import_data")],
         [InlineKeyboardButton(text="🎟 Выдать подписку VK", callback_data="admin_give_vk_subscription")],
         [InlineKeyboardButton(text="🔙 Главное меню", callback_data="main_menu")]
+        [InlineKeyboardButton(text="💸 Заявки на вывод", callback_data="admin_withdrawals")],
     ])
 
 def admin_promocodes_keyboard():
@@ -142,6 +143,7 @@ def vk_tasks_keyboard(tasks):
 
 def buy_spammer_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="1 неделя - 5 USDT", callback_data="buy_spammer_1")],
         [InlineKeyboardButton(text="1 месяц - 10 USDT", callback_data="buy_spammer_1")],
         [InlineKeyboardButton(text="3 месяца - 25 USDT", callback_data="buy_spammer_3")],
         [InlineKeyboardButton(text="6 месяцев - 45 USDT", callback_data="buy_spammer_6")],

@@ -183,6 +183,17 @@ class VKSpamLog(Base):
     sent_at = Column(DateTime, default=datetime.utcnow)
     task = relationship("VKSpamTask")
 
+class WithdrawalRequest(Base):
+    __tablename__ = 'withdrawal_requests'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    amount = Column(Float, nullable=False)
+    wallet = Column(String, nullable=False)
+    status = Column(String, default='pending')  # pending, approved, rejected
+    created_at = Column(DateTime, default=datetime.utcnow)
+    processed_at = Column(DateTime, nullable=True)
+    user = relationship("User")
+
 def init_db():
     Base.metadata.create_all(engine)
     with SessionLocal() as db:
